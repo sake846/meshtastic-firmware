@@ -640,6 +640,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define MESHTASTIC_EXCLUDE_RANGETEST 1
 #endif
 
+#if HAS_GPS
+// GPS::setup enables this path only when it detects a u-blox M10.
+#define HAS_QZSS_DCR 1
+#endif
+
 // Turn off Screen
 #ifdef MESHTASTIC_EXCLUDE_SCREEN
 #undef HAS_SCREEN

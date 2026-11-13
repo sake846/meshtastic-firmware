@@ -946,6 +946,8 @@ bool GPS::setup()
         if (gnssModel != GNSS_MODEL_UNKNOWN) {
             setConnected();
             (void)saveProbeCache();
+            if (gnssModel == GNSS_MODEL_UBLOX10)
+                QzssDcr::setupChannel();
         } else {
             return false;
         }

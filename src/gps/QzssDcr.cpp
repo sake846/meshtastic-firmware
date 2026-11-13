@@ -1,6 +1,8 @@
 #include "configuration.h"
 #if defined(HAS_QZSS_DCR)
+#if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
 #include "MessageStore.h"
+#endif
 #include "QzssDcr.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshService.h"
@@ -157,7 +159,9 @@ void publishFrame(const uint8_t *payload)
     std::memcpy(packet->decoded.payload.bytes, message, position);
     packet->decoded.want_response = false;
 
+#if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
     messageStore.tryAddFromPacket(*packet);
+#endif
     service->sendToPhone(packet);
 }
 
