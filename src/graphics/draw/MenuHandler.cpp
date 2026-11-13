@@ -2055,10 +2055,7 @@ void menuHandler::qzssDcrToggleMenu()
             if (!option.hasValue)
                 return;
 
-            if (gps)
-                gps->setQzssDcrEnabled(option.value);
-            else
-                QzssDcr::setEnabled(option.value);
+            QzssDcr::setReceptionEnabled(option.value);
         });
     bannerOptions.InitialSelected = QzssDcr::isEnabled() ? 1 : 2;
     screen->showOverlayBanner(bannerOptions);

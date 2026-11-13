@@ -2567,5 +2567,13 @@ void GPS::setQzssDcrEnabled(bool enabled)
     if (!GPSInitFinished || powerState == GPS_ACTIVE || powerState == GPS_IDLE)
         setInterval(1);
 }
+
+void QzssDcr::setReceptionEnabled(bool enabled)
+{
+    if (gps)
+        gps->setQzssDcrEnabled(enabled);
+    else
+        QzssDcr::setEnabled(enabled);
+}
 #endif
 #endif // Exclude GPS
