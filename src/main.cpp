@@ -31,6 +31,9 @@
 #include "detect/ScanI2C.h"
 #include "error.h"
 #include "gps/RTC.h"
+#if defined(HAS_QZSS_DCR)
+#include "gps/QzssDcr.h"
+#endif
 
 #ifdef SENSECAP_INDICATOR // on the indicator run the additional serial port for the RP2040
 #include "IndicatorSerial.h"
@@ -870,6 +873,9 @@ void setup()
     // We do this as early as possible because this loads preferences from flash
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     nodeDB = new NodeDB;
+#if defined(HAS_QZSS_DCR)
+    QzssDcr::setupChannel();
+#endif
 #ifdef ARCH_ESP32
     // Config is loaded now, and Bluetooth has not been initialized yet. If the
     // saved config will keep Bluetooth inactive, return its reserved memory early.

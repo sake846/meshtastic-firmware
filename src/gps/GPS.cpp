@@ -21,6 +21,9 @@
 
 #include "FSCommon.h"
 #include "GPSUpdateScheduling.h"
+#if defined(HAS_QZSS_DCR)
+#include "QzssDcr.h"
+#endif
 #include "SPILock.h"
 #include "SafeFile.h"
 #include "cas.h"
@@ -1209,6 +1212,11 @@ bool GPS::setup()
             // Next enable wanted NMEA messages in RAM layer
             SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_ENABLE_NMEA_RAM, "enable messages for M10 GPS RAM", 500);
             delay(750);
+#if defined(HAS_QZSS_DCR)
+            clearBuffer();
+            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_QZSS_DCR, "enable QZSS L1S disaster reports", 500);
+            delay(750);
+#endif
 
             // As the M10 has no flash, the best we can do to preserve the config is to set it in RAM and BBR.
             // BBR will survive a restart, and power off for a while, but modules with small backup
@@ -1531,6 +1539,13 @@ void GPS::down()
     uint32_t sleepTime = scheduling.msUntilNextSearch();
     uint32_t updateInterval = Default::getConfiguredOrDefaultMs(config.position.gps_update_interval);
 
+#if defined(HAS_QZSS_DCR)
+    if (gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
+        setPowerState(GPS_IDLE);
+        return;
+    }
+#endif
+
     LOG_DEBUG("%us until next search", sleepTime / 1000);
 
     // If update interval less than 10 seconds, no attempt to sleep
@@ -1766,11 +1781,18 @@ int32_t GPS::runOnce()
     }
     // ===================== end GPS_ACTIVE state ========================
 
-    if (config.position.fixed_position == true && hasValidLocation)
-        return disable(); // This should trigger when we have a fixed position, and get that first position
+#if defined(HAS_QZSS_DCR)
+    if (!(gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED))
+#endif
+        if (config.position.fixed_position == true && hasValidLocation)
+            return disable(); // This should trigger when we have a fixed position, and get that first position
 
     // 9600bps is approx 1 byte per msec, so considering our buffer size we never need to wake more often than 200ms
     // if not awake we can run super infrequently (once every 5 secs?) to see if we need to wake.
+#if defined(HAS_QZSS_DCR)
+    if (gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED)
+        return GPS_THREAD_INTERVAL;
+#endif
     return (powerState == GPS_ACTIVE) ? GPS_THREAD_INTERVAL : 5000;
 }
 
@@ -2426,7 +2448,13 @@ bool GPS::whileActive()
 #if GPS_DEBUG
     std::string debugmsg = "";
 #endif
-    if (powerState != GPS_ACTIVE) {
+#if defined(HAS_QZSS_DCR)
+    const bool keepQzssDcrActive =
+        gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED;
+#else
+    constexpr bool keepQzssDcrActive = false;
+#endif
+    if (powerState != GPS_ACTIVE && !keepQzssDcrActive) {
         clearBuffer();
         return false;
     }
@@ -2443,7 +2471,11 @@ bool GPS::whileActive()
 #if GPS_DEBUG
         debugmsg += vformat("%c", (c >= 32 && c <= 126) ? c : '.');
 #endif
-        isValid |= reader.encode(c);
+#if defined(HAS_QZSS_DCR)
+        const bool ubxByte = keepQzssDcrActive && QzssDcr::consumeByte(static_cast<uint8_t>(c));
+        if (!ubxByte && powerState == GPS_ACTIVE)
+#endif
+            isValid |= reader.encode(c);
         if (charsInBuf > sizeof(UBXscratch) - 10 || c == '\r') {
             if (strnstr((char *)UBXscratch, "$GPTXT,01,01,02,u-blox ag - www.u-blox.com*50", charsInBuf)) {
                 rebootsSeen++;
@@ -2474,6 +2506,9 @@ void GPS::enable()
 
 int32_t GPS::disable()
 {
+#if defined(HAS_QZSS_DCR)
+    QzssDcr::reset();
+#endif
     enabled = false;
     setInterval(INT32_MAX);
     setPowerState(GPS_OFF);
