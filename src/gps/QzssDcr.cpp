@@ -4,10 +4,17 @@
 #include "MessageStore.h"
 #endif
 #include "QzssDcr.h"
+#include "FSCommon.h"
+#include "SafeFile.h"
+#include "SPILock.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshService.h"
 #include "mesh/NodeDB.h"
 #include "mesh/Router.h"
+#ifdef MESHTASTIC_ENCRYPTED_STORAGE
+#include "security/EncryptedStorage.h"
+#endif
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -21,10 +28,82 @@ constexpr uint16_t MAX_UBX_PAYLOAD = 64;
 constexpr uint32_t CRC24Q_POLY = 0x864CFB;
 constexpr uint32_t CRC24_MASK = 0xFFFFFF;
 constexpr uint8_t L1S_PREAMBLES[] = {0x53, 0x9A, 0xC6};
+constexpr uint32_t SETTINGS_MAGIC = 0x515A4C31;
+constexpr uint8_t SETTINGS_VERSION = 1;
 
 uint8_t channelIndex = NO_CHANNEL;
 uint32_t recentFrames[16] = {};
 uint8_t recentFrameIndex = 0;
+std::atomic<bool> enabled{true};
+std::atomic<bool> settingsLoaded{false};
+std::atomic<bool> parserResetPending{false};
+
+struct SettingsRecord {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t enabled;
+    uint16_t reserved;
+};
+
+void loadSettings()
+{
+    if (settingsLoaded.exchange(true))
+        return;
+
+#ifdef FSCom
+    {
+        concurrency::LockGuard guard(spiLock);
+        if (!FSCom.exists(SETTINGS_FILE_NAME))
+            return;
+    }
+
+    SettingsRecord record = {};
+    size_t bytesRead = 0;
+#ifdef MESHTASTIC_ENCRYPTED_STORAGE
+    if (EncryptedStorage::isLockdownActive()) {
+        if (!EncryptedStorage::readAndDecrypt(SETTINGS_FILE_NAME, reinterpret_cast<uint8_t *>(&record), sizeof(record), bytesRead))
+            return;
+    } else
+#endif
+    {
+        concurrency::LockGuard guard(spiLock);
+        auto file = FSCom.open(SETTINGS_FILE_NAME, FILE_O_READ);
+        if (!file)
+            return;
+        bytesRead = file.read(reinterpret_cast<uint8_t *>(&record), sizeof(record));
+        file.close();
+    }
+
+    if (bytesRead == sizeof(record) && record.magic == SETTINGS_MAGIC && record.version == SETTINGS_VERSION &&
+        record.reserved == 0)
+        enabled.store(record.enabled != 0);
+#endif
+}
+
+bool saveSettings()
+{
+#ifdef FSCom
+    const SettingsRecord record = {SETTINGS_MAGIC, SETTINGS_VERSION, static_cast<uint8_t>(enabled.load()), 0};
+#ifdef MESHTASTIC_ENCRYPTED_STORAGE
+    if (EncryptedStorage::isLockdownActive()) {
+        if (!EncryptedStorage::isUnlocked()) {
+            LOG_WARN("Can't save QZSS L1S setting while storage is locked");
+            return false;
+        }
+        return EncryptedStorage::encryptAndWrite(SETTINGS_FILE_NAME, reinterpret_cast<const uint8_t *>(&record), sizeof(record),
+                                                 true);
+    }
+#endif
+    {
+        concurrency::LockGuard guard(spiLock);
+        FSCom.mkdir("/prefs");
+    }
+    auto file = SafeFile(SETTINGS_FILE_NAME, true);
+    return file.write(reinterpret_cast<const uint8_t *>(&record), sizeof(record)) == sizeof(record) && file.close();
+#else
+    return true;
+#endif
+}
 
 enum class ParserState : uint8_t { Sync1, Sync2, Class, Id, LengthLow, LengthHigh, Payload, ChecksumA, ChecksumB };
 
@@ -213,6 +292,7 @@ void processUbxMessage()
 
 bool setupChannel()
 {
+    loadSettings();
     if (channelFile.channels_count == 0)
         return false;
 
@@ -250,6 +330,29 @@ bool setupChannel()
     return false;
 }
 
+bool isEnabled()
+{
+    loadSettings();
+    return enabled.load();
+}
+
+bool setEnabled(bool value)
+{
+    loadSettings();
+    if (enabled.load() == value)
+        return true;
+
+    const bool previous = enabled.load();
+    enabled.store(value);
+    if (!saveSettings()) {
+        enabled.store(previous);
+        LOG_WARN("Failed to save QZSS L1S setting");
+        return false;
+    }
+    parserResetPending.store(true);
+    return true;
+}
+
 void reset()
 {
     parser.reset();
@@ -257,6 +360,11 @@ void reset()
 
 bool consumeByte(uint8_t byte)
 {
+    if (parserResetPending.exchange(false))
+        parser.reset();
+    if (!isEnabled())
+        return false;
+
     switch (parser.state) {
     case ParserState::Sync1:
         if (byte != 0xB5)

@@ -1216,7 +1216,11 @@ bool GPS::setup()
             delay(750);
 #if defined(HAS_QZSS_DCR)
             clearBuffer();
-            SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_QZSS_DCR, "enable QZSS L1S disaster reports", 500);
+            if (QzssDcr::isEnabled())
+                SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_QZSS_DCR_ENABLE, "enable QZSS L1S disaster reports", 500);
+            else
+                SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_QZSS_DCR_DISABLE, "disable QZSS L1S disaster reports", 500);
+            qzssDcrConfigPending.store(false);
             delay(750);
 #endif
 
@@ -1542,7 +1546,8 @@ void GPS::down()
     uint32_t updateInterval = Default::getConfiguredOrDefaultMs(config.position.gps_update_interval);
 
 #if defined(HAS_QZSS_DCR)
-    if (gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
+    if (gnssModel == GNSS_MODEL_UBLOX10 && QzssDcr::isEnabled() &&
+        config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED) {
         setPowerState(GPS_IDLE);
         return;
     }
@@ -1673,6 +1678,18 @@ int32_t GPS::runOnce()
     }
 #endif
 
+#if defined(HAS_QZSS_DCR)
+    if (qzssDcrConfigPending.load() && gnssModel == GNSS_MODEL_UBLOX10 && didSerialInit && _serial_gps &&
+        (powerState == GPS_ACTIVE || powerState == GPS_IDLE)) {
+        const uint8_t *setting = QzssDcr::isEnabled() ? _message_VALSET_QZSS_DCR_ENABLE : _message_VALSET_QZSS_DCR_DISABLE;
+        const uint8_t packetLength = makeUBXPacket(0x06, 0x8A, sizeof(_message_VALSET_QZSS_DCR_ENABLE), setting);
+        _serial_gps->write(UBXscratch, packetLength);
+        if (getACK(0x06, 0x8A, 500) != GNSS_RESPONSE_OK)
+            LOG_WARN("Failed to update QZSS L1S receiver setting");
+        qzssDcrConfigPending.store(false);
+    }
+#endif
+
     // ======================== GPS_ACTIVE state ========================
     // In GPS_ACTIVE state, GPS is powered on and we're receiving NMEA messages.
     // We use the following logic to determine when to update the local position
@@ -1784,7 +1801,8 @@ int32_t GPS::runOnce()
     // ===================== end GPS_ACTIVE state ========================
 
 #if defined(HAS_QZSS_DCR)
-    if (!(gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED))
+    if (!(gnssModel == GNSS_MODEL_UBLOX10 && QzssDcr::isEnabled() &&
+          config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED))
 #endif
         if (config.position.fixed_position == true && hasValidLocation)
             return disable(); // This should trigger when we have a fixed position, and get that first position
@@ -1792,7 +1810,8 @@ int32_t GPS::runOnce()
     // 9600bps is approx 1 byte per msec, so considering our buffer size we never need to wake more often than 200ms
     // if not awake we can run super infrequently (once every 5 secs?) to see if we need to wake.
 #if defined(HAS_QZSS_DCR)
-    if (gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED)
+    if (gnssModel == GNSS_MODEL_UBLOX10 && QzssDcr::isEnabled() &&
+        config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED)
         return GPS_THREAD_INTERVAL;
 #endif
     return (powerState == GPS_ACTIVE) ? GPS_THREAD_INTERVAL : 5000;
@@ -2452,7 +2471,8 @@ bool GPS::whileActive()
 #endif
 #if defined(HAS_QZSS_DCR)
     const bool keepQzssDcrActive =
-        gnssModel == GNSS_MODEL_UBLOX10 && config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED;
+        gnssModel == GNSS_MODEL_UBLOX10 && QzssDcr::isEnabled() &&
+        config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED;
 #else
     constexpr bool keepQzssDcrActive = false;
 #endif
@@ -2537,4 +2557,15 @@ void GPS::toggleGpsMode()
         enable();
     }
 }
+#if defined(HAS_QZSS_DCR)
+void GPS::setQzssDcrEnabled(bool enabled)
+{
+    if (QzssDcr::isEnabled() == enabled || !QzssDcr::setEnabled(enabled))
+        return;
+
+    qzssDcrConfigPending.store(true);
+    if (!GPSInitFinished || powerState == GPS_ACTIVE || powerState == GPS_IDLE)
+        setInterval(1);
+}
+#endif
 #endif // Exclude GPS

@@ -21,6 +21,9 @@ class menuHandler
         ClockFacePicker,
         ClockMenu,
         PositionBaseMenu,
+#if defined(HAS_QZSS_DCR)
+        QzssDcrToggleMenu,
+#endif
         NodeBaseMenu,
         GpsToggleMenu,
         GpsFormatMenu,
@@ -98,6 +101,9 @@ class menuHandler
     static void positionBaseMenu();
     static void compassNorthMenu();
     static void GPSToggleMenu();
+#if defined(HAS_QZSS_DCR)
+    static void qzssDcrToggleMenu();
+#endif
     static void GPSFormatMenu();
     static void GPSSmartPositionMenu();
     static void GPSUpdateIntervalMenu();

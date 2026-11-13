@@ -2,6 +2,7 @@
 #include "configuration.h"
 #if !MESHTASTIC_EXCLUDE_GPS
 
+#include <atomic>
 #include <memory>
 
 #include "GPSStatus.h"
@@ -131,6 +132,10 @@ class GPS : private concurrency::OSThread
     // toggle between enabled/disabled
     void toggleGpsMode();
 
+#if defined(HAS_QZSS_DCR)
+    void setQzssDcrEnabled(bool enabled);
+#endif
+
     // Change the power state of the GPS - for power saving / shutdown
     void setPowerState(GPSPowerState newState, uint32_t sleepMs = 0);
 
@@ -234,6 +239,10 @@ class GPS : private concurrency::OSThread
 
     bool GPSInitFinished = false; // Init thread finished?
     bool GPSInitStarted = false;  // Init thread finished?
+
+#if defined(HAS_QZSS_DCR)
+    std::atomic<bool> qzssDcrConfigPending{false};
+#endif
 
     GPSPowerState powerState = GPS_OFF; // GPS_ACTIVE if we want a location right now
 #ifdef HAS_AIROHA_SLEEP

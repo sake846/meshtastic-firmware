@@ -5,6 +5,9 @@
 #include "DisplayFormatters.h"
 #include "GPS.h"
 #include "MenuHandler.h"
+#if defined(HAS_QZSS_DCR)
+#include "gps/QzssDcr.h"
+#endif
 #if HAS_HOST_POWEROFF
 #include "platform/portduino/LinuxPower.h"
 #endif
@@ -1493,7 +1496,10 @@ void menuHandler::positionBaseMenu()
         CompassCalibrate,
         GPSSmartPosition,
         GPSUpdateInterval,
-        GPSPositionBroadcast
+        GPSPositionBroadcast,
+#if defined(HAS_QZSS_DCR)
+        QzssDcrToggle
+#endif
     };
 
     static const PositionMenuOption baseOptions[] = {
@@ -1503,6 +1509,9 @@ void menuHandler::positionBaseMenu()
         {"Smart Position", OptionsAction::Select, static_cast<int>(PositionAction::GPSSmartPosition)},
         {"Update Interval", OptionsAction::Select, static_cast<int>(PositionAction::GPSUpdateInterval)},
         {"Broadcast Interval", OptionsAction::Select, static_cast<int>(PositionAction::GPSPositionBroadcast)},
+#if defined(HAS_QZSS_DCR)
+        {"QZSS L1S", OptionsAction::Select, static_cast<int>(PositionAction::QzssDcrToggle)},
+#endif
         {"Compass", OptionsAction::Select, static_cast<int>(PositionAction::CompassMenu)},
     };
 
@@ -1513,6 +1522,9 @@ void menuHandler::positionBaseMenu()
         {"Smart Position", OptionsAction::Select, static_cast<int>(PositionAction::GPSSmartPosition)},
         {"Update Interval", OptionsAction::Select, static_cast<int>(PositionAction::GPSUpdateInterval)},
         {"Broadcast Interval", OptionsAction::Select, static_cast<int>(PositionAction::GPSPositionBroadcast)},
+#if defined(HAS_QZSS_DCR)
+        {"QZSS L1S", OptionsAction::Select, static_cast<int>(PositionAction::QzssDcrToggle)},
+#endif
         {"Compass", OptionsAction::Select, static_cast<int>(PositionAction::CompassMenu)},
         {"Compass Calibrate", OptionsAction::Select, static_cast<int>(PositionAction::CompassCalibrate)},
     };
@@ -1547,6 +1559,12 @@ void menuHandler::positionBaseMenu()
             menuQueue = CompassPointNorthMenu;
             screen->runNow();
             break;
+#if defined(HAS_QZSS_DCR)
+        case PositionAction::QzssDcrToggle:
+            menuQueue = QzssDcrToggleMenu;
+            screen->runNow();
+            break;
+#endif
         case PositionAction::CompassCalibrate:
 #if !MESHTASTIC_EXCLUDE_ACCELEROMETER
             if (accelerometerThread) {
@@ -2016,6 +2034,37 @@ void menuHandler::GPSToggleMenu()
 
     screen->showOverlayBanner(bannerOptions);
 }
+#if defined(HAS_QZSS_DCR)
+void menuHandler::qzssDcrToggleMenu()
+{
+    static const MenuOption<bool> options[] = {
+        {"Back", OptionsAction::Back},
+        {"Enabled", OptionsAction::Select, true},
+        {"Disabled", OptionsAction::Select, false},
+    };
+    constexpr size_t optionCount = sizeof(options) / sizeof(options[0]);
+    static std::array<const char *, optionCount> labels{};
+
+    auto bannerOptions = createStaticBannerOptions(
+        "QZSS L1S reception", options, labels, [](const MenuOption<bool> &option, int) -> void {
+            if (option.action == OptionsAction::Back) {
+                menuQueue = PositionBaseMenu;
+                screen->runNow();
+                return;
+            }
+            if (!option.hasValue)
+                return;
+
+            if (gps)
+                gps->setQzssDcrEnabled(option.value);
+            else
+                QzssDcr::setEnabled(option.value);
+        });
+    bannerOptions.InitialSelected = QzssDcr::isEnabled() ? 1 : 2;
+    screen->showOverlayBanner(bannerOptions);
+}
+#endif
+
 void menuHandler::GPSFormatMenu()
 {
     static const GPSFormatOption formatOptionsHigh[] = {
@@ -3271,6 +3320,11 @@ void menuHandler::handleMenuSwitch(OLEDDisplay *display)
         nodeListMenu();
         break;
 #if !MESHTASTIC_EXCLUDE_GPS
+#if defined(HAS_QZSS_DCR)
+    case QzssDcrToggleMenu:
+        qzssDcrToggleMenu();
+        break;
+#endif
     case GpsToggleMenu:
         GPSToggleMenu();
         break;

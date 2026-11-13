@@ -26,6 +26,9 @@
 #endif
 #include "error.h"
 #include "gps/RTC.h"
+#if defined(HAS_QZSS_DCR)
+#include "gps/QzssDcr.h"
+#endif
 #include "main.h"
 #include "memory/MemAudit.h"
 #include "mesh-pb-constants.h"
@@ -3027,7 +3030,11 @@ void NodeDB::loadFromDisk()
     // skipping the whole block avoids the wasted attempts and error logs.
     if (EncryptedStorage::isLockdownActive()) {
         const char *filesToCheck[] = {configFileName, moduleConfigFileName, channelFileName, deviceStateFileName,
-                                      nodeDatabaseFileName};
+                                      nodeDatabaseFileName,
+#if defined(HAS_QZSS_DCR)
+                                      QzssDcr::SETTINGS_FILE_NAME,
+#endif
+        };
         const int segments[] = {SEGMENT_CONFIG, SEGMENT_MODULECONFIG, SEGMENT_CHANNELS, SEGMENT_DEVICESTATE,
                                 SEGMENT_NODEDATABASE};
         int toSave = 0;
@@ -3233,7 +3240,11 @@ bool NodeDB::disableLockdownToPlaintext()
     // the commit point) only runs after every file is confirmed plaintext.
     const char *filesToCheck[] = {STANDARD_CONFIG_FILE_NAME, STANDARD_CHANNEL_FILE_NAME, STANDARD_BACKUP_FILE_NAME,
                                   EVENT_CONFIG_FILE_NAME,    EVENT_CHANNEL_FILE_NAME,    EVENT_BACKUP_FILE_NAME,
-                                  moduleConfigFileName,      deviceStateFileName,        nodeDatabaseFileName};
+                                  moduleConfigFileName,      deviceStateFileName,        nodeDatabaseFileName,
+#if defined(HAS_QZSS_DCR)
+                                  QzssDcr::SETTINGS_FILE_NAME,
+#endif
+    };
     for (const char *fn : filesToCheck) {
         if (!EncryptedStorage::migrateFileToPlaintext(fn)) {
             LOG_ERROR("NodeDB: revert %s to plaintext failed; abort disable (stays in lockdown)", fn);
