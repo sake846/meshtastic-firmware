@@ -10,5 +10,6 @@
   },
   "[powershell]": {
     "editor.defaultFormatter": "ms-vscode.powershell"
-  }
+  },
+  "cmake.sourceDirectory": "C:/Users/user/source/codex/meshtastic-firmware/.dummy"
 }
