@@ -368,7 +368,6 @@ for line in qzss_font_bdf.read_text(encoding="ascii").splitlines():
         if codepoint is not None:
             width = qzss_glyph["width"]
             height = qzss_glyph["height"]
-            stride = (width + 7) // 8
             pixels = []
             for row in qzss_bitmap_rows or []:
                 values = bytes.fromhex(row)
