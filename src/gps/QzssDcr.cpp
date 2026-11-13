@@ -82,6 +82,43 @@ uint32_t crc24q(const uint8_t *frame)
     return crc;
 }
 
+constexpr NodeNum MICHIBIKI_NODE_NUM_BASE = 0x515A5300; // QZS prefix, with the UBX svId in the low byte.
+constexpr uint8_t MAX_MICHIBIKI_SV_ID = 10;
+
+// These local-only identities attribute DCR chat without making satellites radio peers.
+bool isMichibikiSatelliteNode(const meshtastic_NodeInfoLite *node, uint8_t svId)
+{
+    if (!node || node->num != MICHIBIKI_NODE_NUM_BASE + svId || !nodeInfoLiteHasUser(node) ||
+        node->public_key.size != 0 || !nodeInfoLiteHasIsUnmessagable(node) || !nodeInfoLiteIsUnmessagable(node))
+        return false;
+
+    char expectedName[sizeof(node->long_name)];
+    std::snprintf(expectedName, sizeof(expectedName), "Michibiki SV%u", static_cast<unsigned>(svId));
+    return std::strcmp(node->long_name, expectedName) == 0;
+}
+
+bool registerMichibikiSatellite(uint8_t svId)
+{
+    if (!nodeDB || svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
+        return false;
+
+    const NodeNum nodeNum = MICHIBIKI_NODE_NUM_BASE + svId;
+    const meshtastic_NodeInfoLite *existing = nodeDB->getMeshNode(nodeNum);
+    if (existing && !isMichibikiSatelliteNode(existing, svId))
+        return false;
+    if (!existing && nodeDB->isFull())
+        return false;
+
+    meshtastic_User satellite = meshtastic_User_init_zero;
+    std::snprintf(satellite.long_name, sizeof(satellite.long_name), "Michibiki SV%u", static_cast<unsigned>(svId));
+    std::snprintf(satellite.short_name, sizeof(satellite.short_name), "Q%u", static_cast<unsigned>(svId));
+    satellite.hw_model = meshtastic_HardwareModel_UNSET;
+    satellite.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
+    satellite.has_is_unmessagable = true;
+    satellite.is_unmessagable = true;
+    nodeDB->updateUser(nodeNum, satellite, channelIndex);
+    return isMichibikiSatelliteNode(nodeDB->getMeshNode(nodeNum), svId);
+}
 uint32_t frameHash(const uint8_t *frame)
 {
     uint32_t hash = 2166136261UL;
@@ -158,6 +195,8 @@ void publishFrame(const uint8_t *payload)
     packet->decoded.payload.size = static_cast<uint16_t>(position);
     std::memcpy(packet->decoded.payload.bytes, message, position);
     packet->decoded.want_response = false;
+    if (registerMichibikiSatellite(payload[1]))
+        packet->from = MICHIBIKI_NODE_NUM_BASE + payload[1];
 
 #if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
     messageStore.tryAddFromPacket(*packet);
