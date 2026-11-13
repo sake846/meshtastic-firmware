@@ -184,7 +184,7 @@ bool setupChannel()
             if (channel.role == meshtastic_Channel_Role_DISABLED) {
                 channel.role = meshtastic_Channel_Role_SECONDARY;
                 channels.onConfigChanged();
-                nodeDB->saveChannelsToDisk();
+                nodeDB->saveToDisk(SEGMENT_CHANNELS);
             }
             return true;
         }
@@ -203,7 +203,7 @@ bool setupChannel()
         channel.settings.psk.size = 0;
         channels.onConfigChanged();
         channelIndex = i;
-        nodeDB->saveChannelsToDisk();
+        nodeDB->saveToDisk(SEGMENT_CHANNELS);
         return true;
     }
 
