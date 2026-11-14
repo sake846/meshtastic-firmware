@@ -8,9 +8,9 @@ inline constexpr char SETTINGS_FILE_NAME[] = "/prefs/qzss_dcr.dat";
 
 bool setupChannel();
 bool isEnabled();
-bool isM10QDetected();
+bool isUbloxM10Detected();
 bool getCapturedSatellite(uint8_t &svId);
-void setM10QDetected(bool detected);
+void setUbloxM10Detected(bool detected);
 bool setEnabled(bool enabled);
 void setReceptionEnabled(bool enabled);
 void reset();

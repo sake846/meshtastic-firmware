@@ -946,14 +946,14 @@ bool GPS::setup()
         if (gnssModel != GNSS_MODEL_UNKNOWN) {
             setConnected();
 #if defined(HAS_QZSS_DCR)
-            QzssDcr::setM10QDetected(gnssModel == GNSS_MODEL_UBLOX10);
+            QzssDcr::setUbloxM10Detected(gnssModel == GNSS_MODEL_UBLOX10);
 #endif
             (void)saveProbeCache();
             if (gnssModel == GNSS_MODEL_UBLOX10)
                 QzssDcr::setupChannel();
         } else {
 #if defined(HAS_QZSS_DCR)
-            QzssDcr::setM10QDetected(false);
+            QzssDcr::setUbloxM10Detected(false);
 #endif
             return false;
         }

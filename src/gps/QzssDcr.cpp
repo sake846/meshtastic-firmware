@@ -38,7 +38,7 @@ uint8_t channelIndex = NO_CHANNEL;
 uint32_t recentFrames[16] = {};
 uint8_t recentFrameIndex = 0;
 std::atomic<bool> enabled{true};
-std::atomic<bool> m10QDetected{false};
+std::atomic<bool> m10Detected{false};
 std::atomic<bool> settingsLoaded{false};
 std::atomic<bool> parserResetPending{false};
 std::atomic<bool> hasCapturedSatellite{false};
@@ -349,9 +349,9 @@ bool isEnabled()
     return enabled.load();
 }
 
-bool isM10QDetected()
+bool isUbloxM10Detected()
 {
-    return m10QDetected.load();
+    return m10Detected.load();
 }
 
 bool getCapturedSatellite(uint8_t &svId)
@@ -364,9 +364,9 @@ bool getCapturedSatellite(uint8_t &svId)
     return true;
 }
 
-void setM10QDetected(bool detected)
+void setUbloxM10Detected(bool detected)
 {
-    m10QDetected.store(detected);
+    m10Detected.store(detected);
     if (!detected)
         hasCapturedSatellite.store(false);
 }

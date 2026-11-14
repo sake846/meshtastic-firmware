@@ -89,7 +89,7 @@ def patch_mui_status():
         + newline
         + b"        return;"
         + newline
-        + b"    const bool detected = QzssDcr::isM10QDetected();"
+        + b"    const bool detected = QzssDcr::isUbloxM10Detected();"
         + newline
         + b"    const bool enabled = QzssDcr::isEnabled();"
         + newline
@@ -99,19 +99,19 @@ def patch_mui_status():
         + newline
         + b"    if (!detected) lv_label_set_text("
         + badge
-        + b', "NO M10Q");'
+        + b', "NO M10");'
         + newline
         + b"    else if (!enabled) lv_label_set_text("
         + badge
-        + b', "M10Q L1S OFF");'
+        + b', "M10 L1S OFF");'
         + newline
         + b"    else if (captured) lv_label_set_text_fmt("
         + badge
-        + b', "M10Q Q%u", svId);'
+        + b', "M10 Q%u", svId);'
         + newline
         + b"    else lv_label_set_text("
         + badge
-        + b', "M10Q SEARCH");'
+        + b', "M10 SEARCH");'
         + newline
         + b"    lv_obj_set_style_text_color("
         + badge
