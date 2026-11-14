@@ -280,7 +280,11 @@ std::pair<uint8_t, TwoWire *> nodeTelemetrySensorsMap[_meshtastic_TelemetrySenso
 
 Router *router = NULL; // Users of router don't care what sort of subclass implements that API
 
+#if defined(HAS_QZSS_DCR)
+const char *firmware_version = xstr(APP_VERSION_SHORT) " L1S";
+#else
 const char *firmware_version = optstr(APP_VERSION_SHORT);
+#endif
 
 const char *getDeviceName()
 {

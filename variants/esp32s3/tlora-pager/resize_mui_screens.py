@@ -200,6 +200,11 @@ if legacy_scroll:
         + b"    if (obj) lv_obj_add_event_cb(obj, pagerScrollPanelKey, LV_EVENT_KEY, nullptr);",
     )
 focus_helper_marker = b"static void pagerApplyInsetFocus(lv_obj_t *obj)"
+focus_event_marker = b"static void pagerNodeFocusEvent(lv_event_t *e)"
+focus_event_start = data.find(focus_event_marker)
+focus_helper_start = data.find(focus_helper_marker)
+if 0 <= focus_event_start < focus_helper_start:
+    data = data[:focus_event_start] + data[focus_helper_start:]
 if focus_helper_marker in data:
     helper_start = data.index(focus_helper_marker)
     helper_end = data.index(focus_anchor, helper_start)
@@ -557,109 +562,6 @@ if b"QZSS-DCR chat is read-only" not in qzss_data:
         raise RuntimeError("unexpected message send guard location")
     qzss_data = qzss_data.replace(read_only_anchor, read_only_patch, 1)
 
-gps_include_anchor = b'#include "graphics/view/TFT/TFTView_320x240.h"' + qzss_newline
-gps_includes = b'#include "gps/QzssDcr.h"' + qzss_newline
-qzss_data = qzss_data.replace(b'#include "gps/GPS.h"' + qzss_newline, b"", 1)
-if b'#include "gps/QzssDcr.h"' not in qzss_data:
-    if qzss_data.count(gps_include_anchor) != 1:
-        raise RuntimeError("unexpected MUI GPS include location")
-    qzss_data = qzss_data.replace(
-        gps_include_anchor, gps_include_anchor + gps_includes, 1
-    )
-
-badge_decl_anchor = b"#include <time.h>" + qzss_newline
-badge_decl = (
-    badge_decl_anchor + b"static lv_obj_t *pagerQzssBadge = nullptr;" + qzss_newline
-)
-if b"static lv_obj_t *pagerQzssBadge" not in qzss_data:
-    if qzss_data.count(badge_decl_anchor) != 1:
-        raise RuntimeError("unexpected MUI QZSS badge declaration location")
-    qzss_data = qzss_data.replace(badge_decl_anchor, badge_decl, 1)
-
-location_event_anchor = (
-    b"    lv_obj_add_event_cb(objects.home_location_button, this->ui_event_LocationButton, LV_EVENT_LONG_PRESSED, NULL);"
-    + qzss_newline
-)
-location_event_patch = location_event_anchor + (
-    b"    lv_obj_add_event_cb(objects.home_location_button, this->ui_event_LocationButton, LV_EVENT_SHORT_CLICKED, NULL);"
-    + qzss_newline
-)
-if b"LV_EVENT_SHORT_CLICKED, NULL);" not in qzss_data:
-    if qzss_data.count(location_event_anchor) != 1:
-        raise RuntimeError("unexpected MUI location event registration")
-    qzss_data = qzss_data.replace(location_event_anchor, location_event_patch, 1)
-
-badge_init_anchor = (
-    b"    lv_obj_add_event_cb(objects.home_location_button, this->ui_event_LocationButton, LV_EVENT_SHORT_CLICKED, NULL);"
-    + qzss_newline
-)
-badge_init = (
-    b"    pagerQzssBadge = lv_label_create(objects.home_location_button);"
-    + qzss_newline
-    + b"    lv_obj_set_style_text_font(pagerQzssBadge, &ui_font_montserrat_12, LV_PART_MAIN | LV_STATE_DEFAULT);"
-    + qzss_newline
-    + b'    lv_label_set_text(pagerQzssBadge, QzssDcr::isEnabled() ? "L1S ON" : "L1S OFF");'
-    + qzss_newline
-    + b"    lv_obj_set_style_text_color(pagerQzssBadge,"
-    + qzss_newline
-    + b"                                lv_color_hex(QzssDcr::isEnabled() ? 0x00C853 : 0x808080),"
-    + qzss_newline
-    + b"                                LV_PART_MAIN | LV_STATE_DEFAULT);"
-    + qzss_newline
-    + b"    lv_obj_align(pagerQzssBadge, LV_ALIGN_BOTTOM_RIGHT, -2, -2);"
-    + qzss_newline
-)
-if b"pagerQzssBadge = lv_label_create" not in qzss_data:
-    if qzss_data.count(badge_init_anchor) != 1:
-        raise RuntimeError("unexpected MUI QZSS badge initialization location")
-    qzss_data = qzss_data.replace(badge_init_anchor, badge_init_anchor + badge_init, 1)
-
-long_press_anchor = (
-    b"    } else if (event_code == LV_EVENT_LONG_PRESSED && THIS->configComplete) {"
-    + qzss_newline
-)
-short_press_branch = (
-    b"    } else if (event_code == LV_EVENT_SHORT_CLICKED && THIS->configComplete && THIS->activeSettings == eNone) {"
-    + qzss_newline
-    + b"        QzssDcr::setReceptionEnabled(!QzssDcr::isEnabled());"
-    + qzss_newline
-    + b"        const bool enabled = QzssDcr::isEnabled();"
-    + qzss_newline
-    + b'        lv_label_set_text(pagerQzssBadge, enabled ? "L1S ON" : "L1S OFF");'
-    + qzss_newline
-    + b"        lv_obj_set_style_text_color(pagerQzssBadge,"
-    + qzss_newline
-    + b"                                    lv_color_hex(enabled ? 0x00C853 : 0x808080),"
-    + qzss_newline
-    + b"                                    LV_PART_MAIN | LV_STATE_DEFAULT);"
-    + qzss_newline
-)
-short_press_anchor = (
-    b"    } else if (event_code == LV_EVENT_SHORT_CLICKED && THIS->configComplete && THIS->activeSettings == eNone) {"
-    + qzss_newline
-)
-handler_start = (
-    b"void TFTView_320x240::ui_event_LocationButton(lv_event_t *e)" + qzss_newline
-)
-handler_start_pos = qzss_data.index(handler_start)
-long_press_pos = qzss_data.index(long_press_anchor, handler_start_pos)
-short_press_pos = qzss_data.find(short_press_anchor, handler_start_pos, long_press_pos)
-if (
-    b"lv_label_set_text(pagerQzssBadge, enabled"
-    not in qzss_data[handler_start_pos:long_press_pos]
-):
-    if short_press_pos >= 0:
-        qzss_data = (
-            qzss_data[:short_press_pos]
-            + short_press_branch
-            + qzss_data[long_press_pos:]
-        )
-    else:
-        if qzss_data.count(long_press_anchor) != 1:
-            raise RuntimeError("unexpected MUI location event handler")
-        qzss_data = qzss_data.replace(
-            long_press_anchor, short_press_branch + long_press_anchor, 1
-        )
 source.write_bytes(qzss_data)
 device_gui = library / "source" / "graphics" / "DeviceGUI.cpp"
 if not device_gui.is_file():

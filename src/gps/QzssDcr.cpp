@@ -7,10 +7,12 @@
 #include "FSCommon.h"
 #include "SafeFile.h"
 #include "SPILock.h"
+#include "UptimeClock.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshService.h"
 #include "mesh/NodeDB.h"
 #include "mesh/Router.h"
+#include "mesh/Throttle.h"
 #ifdef MESHTASTIC_ENCRYPTED_STORAGE
 #include "security/EncryptedStorage.h"
 #endif
@@ -30,13 +32,18 @@ constexpr uint32_t CRC24_MASK = 0xFFFFFF;
 constexpr uint8_t L1S_PREAMBLES[] = {0x53, 0x9A, 0xC6};
 constexpr uint32_t SETTINGS_MAGIC = 0x515A4C31;
 constexpr uint8_t SETTINGS_VERSION = 1;
+constexpr uint32_t CAPTURE_TIMEOUT_MS = 15000;
 
 uint8_t channelIndex = NO_CHANNEL;
 uint32_t recentFrames[16] = {};
 uint8_t recentFrameIndex = 0;
 std::atomic<bool> enabled{true};
+std::atomic<bool> m10QDetected{false};
 std::atomic<bool> settingsLoaded{false};
 std::atomic<bool> parserResetPending{false};
+std::atomic<bool> hasCapturedSatellite{false};
+std::atomic<uint32_t> lastCaptureMs{0};
+std::atomic<uint8_t> lastCaptureSvId{0};
 
 struct SettingsRecord {
     uint32_t magic;
@@ -221,6 +228,8 @@ void publishFrame(const uint8_t *payload)
 {
     if (payload[0] != 5 || payload[2] != 1 || payload[4] != 8)
         return;
+    const uint8_t svId = payload[1];
+    const bool satelliteRegistered = registerMichibikiSatellite(svId);
 
     uint8_t frame[32];
     for (uint8_t word = 0; word < 8; ++word) {
@@ -236,6 +245,10 @@ void publishFrame(const uint8_t *payload)
         return;
     if (crc24q(frame) != getBits(frame, 226, 24))
         return;
+
+    lastCaptureSvId.store(svId);
+    lastCaptureMs.store(Time::getMillis());
+    hasCapturedSatellite.store(true);
 
     const uint8_t messageType = static_cast<uint8_t>(getBits(frame, 8, 6));
     if (messageType != 43 && messageType != 44)
@@ -274,8 +287,8 @@ void publishFrame(const uint8_t *payload)
     packet->decoded.payload.size = static_cast<uint16_t>(position);
     std::memcpy(packet->decoded.payload.bytes, message, position);
     packet->decoded.want_response = false;
-    if (registerMichibikiSatellite(payload[1]))
-        packet->from = MICHIBIKI_NODE_NUM_BASE + payload[1];
+    if (satelliteRegistered)
+        packet->from = MICHIBIKI_NODE_NUM_BASE + svId;
 
 #if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
     messageStore.tryAddFromPacket(*packet);
@@ -336,6 +349,28 @@ bool isEnabled()
     return enabled.load();
 }
 
+bool isM10QDetected()
+{
+    return m10QDetected.load();
+}
+
+bool getCapturedSatellite(uint8_t &svId)
+{
+    const uint32_t lastFrameMs = lastCaptureMs.load();
+    if (!hasCapturedSatellite.load() || Throttle::hasElapsed(lastFrameMs, CAPTURE_TIMEOUT_MS))
+        return false;
+
+    svId = lastCaptureSvId.load();
+    return true;
+}
+
+void setM10QDetected(bool detected)
+{
+    m10QDetected.store(detected);
+    if (!detected)
+        hasCapturedSatellite.store(false);
+}
+
 bool setEnabled(bool value)
 {
     loadSettings();
@@ -349,6 +384,7 @@ bool setEnabled(bool value)
         LOG_WARN("Failed to save QZSS L1S setting");
         return false;
     }
+    hasCapturedSatellite.store(false);
     parserResetPending.store(true);
     return true;
 }
@@ -356,6 +392,7 @@ bool setEnabled(bool value)
 void reset()
 {
     parser.reset();
+    hasCapturedSatellite.store(false);
 }
 
 bool consumeByte(uint8_t byte)
