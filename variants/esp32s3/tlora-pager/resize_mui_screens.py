@@ -92,7 +92,18 @@ if b"pagerMUICompactIcons" not in data:
 
 legacy_scroll = b"void TFTView_320x240::ui_event_scroll_panel" not in data
 focus_anchor = b"void TFTView_320x240::apply_hotfix(void)" + newline
-focus_helpers = r"""static void pagerApplyInsetFocus(lv_obj_t *obj)
+focus_helpers = r"""static void pagerNodeFocusEvent(lv_event_t *e)
+{
+    lv_obj_t *row = lv_obj_get_parent(lv_event_get_target_obj(e));
+    if (!row)
+        return;
+    if (lv_event_get_code(e) == LV_EVENT_FOCUSED)
+        lv_obj_add_state(row, LV_STATE_FOCUS_KEY);
+    else
+        lv_obj_remove_state(row, LV_STATE_FOCUS_KEY);
+}
+
+static void pagerApplyInsetFocus(lv_obj_t *obj)
 {
     if (!obj)
         return;
@@ -100,20 +111,33 @@ focus_helpers = r"""static void pagerApplyInsetFocus(lv_obj_t *obj)
         const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_ITEMS | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
         lv_obj_set_style_outline_width(obj, 0, focus);
         lv_obj_set_style_border_width(obj, 2, focus);
-        lv_obj_set_style_border_color(obj, lv_color_hex(0x67ea94), focus);
+        lv_obj_set_style_border_color(obj, lv_color_hex(0xaafbff), focus);
+    } else if (lv_obj_check_type(obj, &lv_button_class) && lv_obj_get_parent(obj) &&
+               lv_obj_get_parent(lv_obj_get_parent(obj)) == objects.nodes_panel) {
+        const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
+        const lv_style_selector_t pressed = (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_PRESSED;
+        lv_obj_t *row = lv_obj_get_parent(obj);
+        lv_obj_set_style_border_width(obj, 0, focus);
+        lv_obj_set_style_outline_width(obj, 0, focus);
+        lv_obj_set_style_border_width(row, 2, focus);
+        lv_obj_set_style_border_color(row, lv_color_hex(0xaafbff), focus);
+        lv_obj_add_event_cb(obj, pagerNodeFocusEvent, LV_EVENT_FOCUSED, nullptr);
+        lv_obj_add_event_cb(obj, pagerNodeFocusEvent, LV_EVENT_DEFOCUSED, nullptr);
+        lv_obj_set_style_transform_width(obj, 0, pressed);
+        lv_obj_set_style_transform_height(obj, 0, pressed);
     } else if (lv_obj_check_type(obj, &lv_button_class) || lv_obj_check_type(obj, &lv_imagebutton_class) ||
                lv_obj_check_type(obj, &lv_textarea_class) || lv_obj_check_type(obj, &lv_dropdown_class) ||
                lv_obj_check_type(obj, &lv_switch_class) || lv_obj_check_type(obj, &lv_checkbox_class)) {
         const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
         lv_obj_set_style_outline_width(obj, 0, focus);
         lv_obj_set_style_border_width(obj, 2, focus);
-        lv_obj_set_style_border_color(obj, lv_color_hex(0x67ea94), focus);
+        lv_obj_set_style_border_color(obj, lv_color_hex(0xaafbff), focus);
     } else if (lv_obj_check_type(obj, &lv_slider_class)) {
         const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
         const lv_style_selector_t knobFocus = (lv_style_selector_t)LV_PART_KNOB | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
         lv_obj_set_style_outline_width(obj, 0, focus);
         lv_obj_set_style_border_width(obj, 2, knobFocus);
-        lv_obj_set_style_border_color(obj, lv_color_hex(0x67ea94), knobFocus);
+        lv_obj_set_style_border_color(obj, lv_color_hex(0xaafbff), knobFocus);
     }
 }
 
@@ -307,6 +331,35 @@ if (
         data = data.replace(scroll_anchor, scroll_patch, 1)
     elif not legacy_scroll:
         raise RuntimeError("unexpected meshtastic-device-ui scroll panel key handling")
+
+menu_focus_decl = (
+    b"#if defined(INPUTDRIVER_ROTARY_TYPE)"
+    + newline
+    + b"extern void pagerSetActiveMenuButton(lv_obj_t *button);"
+    + newline
+    + b"#endif"
+    + newline
+)
+if b"extern void pagerSetActiveMenuButton" not in data:
+    include_anchor = b'#include "ui.h"' + newline
+    if data.count(include_anchor) != 1:
+        raise RuntimeError("unexpected meshtastic-device-ui TFT view includes")
+    data = data.replace(include_anchor, include_anchor + menu_focus_decl, 1)
+
+active_button_anchor = b"    activeButton = b;" + newline
+active_button_patch = (
+    active_button_anchor
+    + b"#if defined(INPUTDRIVER_ROTARY_TYPE)"
+    + newline
+    + b"    pagerSetActiveMenuButton(b);"
+    + newline
+    + b"#endif"
+    + newline
+)
+if b"pagerSetActiveMenuButton(b);" not in data:
+    if data.count(active_button_anchor) != 1:
+        raise RuntimeError("unexpected meshtastic-device-ui active menu button")
+    data = data.replace(active_button_anchor, active_button_patch, 1)
 
 source.write_bytes(data)
 
@@ -617,6 +670,112 @@ newline = b"\r\n" if b"\r\n" in data else b"\n"
 rotary_marker = b"class PagerRotaryInputDriver final"
 rotary_driver = """#if defined(INPUTDRIVER_ROTARY_TYPE)
 #include "RotaryEncoder.h"
+#include "ui.h"
+
+extern bool pagerFunctionModifierActive;
+extern void pagerClearFunctionModifier();
+static lv_obj_t *pagerActiveMenuButton = nullptr;
+
+void pagerSetActiveMenuButton(lv_obj_t *button)
+{
+    pagerActiveMenuButton = button;
+}
+
+static int pagerMenuButtonIndex(lv_obj_t *obj)
+{
+    if (!obj)
+        return -1;
+    if (obj == objects.home_button) return 0;
+    if (obj == objects.nodes_button) return 1;
+    if (obj == objects.groups_button) return 2;
+    if (obj == objects.messages_button) return 3;
+    if (obj == objects.map_button) return 4;
+    if (obj == objects.settings_button) return 5;
+    return -1;
+}
+
+static lv_obj_t *pagerMenuButtonAt(int index)
+{
+    switch (index) {
+    case 0: return objects.home_button;
+    case 1: return objects.nodes_button;
+    case 2: return objects.groups_button;
+    case 3: return objects.messages_button;
+    case 4: return objects.map_button;
+    case 5: return objects.settings_button;
+    default: return nullptr;
+    }
+}
+
+static bool pagerMenuButtonAvailable(lv_obj_t *button)
+{
+    return button && !lv_obj_has_flag(button, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_state(button, LV_STATE_DISABLED);
+}
+
+static void pagerFocusMenuStep(lv_group_t *group, int direction)
+{
+    int index = pagerMenuButtonIndex(lv_group_get_focused(group));
+    if (index < 0)
+        index = pagerMenuButtonIndex(pagerActiveMenuButton);
+    if (index < 0)
+        index = 0;
+
+    for (int i = 0; i < 6; ++i) {
+        index = (index + direction + 6) % 6;
+        lv_obj_t *button = pagerMenuButtonAt(index);
+        if (pagerMenuButtonAvailable(button)) {
+            lv_group_focus_obj(button);
+            return;
+        }
+    }
+}
+
+bool pagerHandleBack(lv_indev_t *indev)
+{
+    lv_group_t *group = indev ? lv_indev_get_group(indev) : nullptr;
+    if (!group || lv_screen_active() != objects.main_screen || !pagerMenuButtonAvailable(pagerActiveMenuButton))
+        return false;
+
+    lv_group_set_editing(group, false);
+    lv_group_focus_obj(pagerActiveMenuButton);
+    return true;
+}
+
+static bool pagerMoveFocus(lv_group_t *group, int16_t diff)
+{
+    if (!group || !diff)
+        return false;
+
+    if (pagerMenuButtonIndex(lv_group_get_focused(group)) >= 0) {
+        lv_group_set_editing(group, false);
+        while (diff > 0) {
+            pagerFocusMenuStep(group, 1);
+            --diff;
+        }
+        while (diff < 0) {
+            pagerFocusMenuStep(group, -1);
+            ++diff;
+        }
+        return true;
+    }
+
+    if (lv_group_get_editing(group))
+        return false;
+
+    while (diff > 0) {
+        lv_group_focus_next(group);
+        for (int i = 0; i < 6 && pagerMenuButtonIndex(lv_group_get_focused(group)) >= 0; ++i)
+            lv_group_focus_next(group);
+        --diff;
+    }
+    while (diff < 0) {
+        lv_group_focus_prev(group);
+        for (int i = 0; i < 6 && pagerMenuButtonIndex(lv_group_get_focused(group)) >= 0; ++i)
+            lv_group_focus_prev(group);
+        ++diff;
+    }
+    return true;
+}
 
 class PagerRotaryInputDriver final : public InputDriver
 {
@@ -660,6 +819,11 @@ class PagerRotaryInputDriver final : public InputDriver
         const bool buttonPressed = rotaryInstance && rotaryInstance->readButton() == RotaryEncoder::BUTTON_PRESSED;
         bool endTextEdit = false;
         lv_group_t *group = indev ? lv_indev_get_group(indev) : nullptr;
+        if (buttonPressed && !suppressEncoderClick && pagerFunctionModifierActive) {
+            pagerClearFunctionModifier();
+            pagerHandleBack(indev);
+            suppressEncoderClick = true;
+        }
         lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;
         if (buttonPressed && !suppressEncoderClick && group && lv_group_get_editing(group) && focused &&
             lv_obj_check_type(focused, &lv_textarea_class)) {
@@ -668,9 +832,10 @@ class PagerRotaryInputDriver final : public InputDriver
             endTextEdit = true;
         }
 
-        data->key = endTextEdit || suppressEncoderClick ? 0 : LV_KEY_ENTER;
-        data->enc_diff = encoderDiff;
+        const int16_t diff = encoderDiff;
         encoderDiff = 0;
+        data->key = endTextEdit || suppressEncoderClick ? 0 : LV_KEY_ENTER;
+        data->enc_diff = pagerMoveFocus(group, diff) ? 0 : diff;
         data->state = buttonPressed && !suppressEncoderClick ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
         if (!buttonPressed)
             suppressEncoderClick = false;
@@ -839,6 +1004,15 @@ static void pagerKeyboardWriteRegister(uint8_t address, uint8_t reg, uint8_t val
     Wire.endTransmission();
 }
 
+static uint8_t pagerKeyboardModifiers = 0;
+bool pagerFunctionModifierActive = false;
+
+void pagerClearFunctionModifier()
+{
+    pagerKeyboardModifiers &= ~0x02;
+    pagerFunctionModifierActive = false;
+}
+
 static const char pagerKeyboardMap[31][3] = {
     {'q', 'Q', '1'}, {'w', 'W', '2'}, {'e', 'E', '3'}, {'r', 'R', '4'}, {'t', 'T', '5'},
     {'y', 'Y', '6'}, {'u', 'U', '7'}, {'i', 'I', '8'}, {'o', 'O', '9'}, {'p', 'P', '0'},
@@ -927,7 +1101,6 @@ pager_read_old = r"""void TLoraPagerKeyboardInputDriver::readKeyboard(uint8_t ad
 ).encode()
 pager_read_new = r"""void TLoraPagerKeyboardInputDriver::readKeyboard(uint8_t address, lv_indev_t *indev, lv_indev_data_t *data)
 {
-    static uint8_t modifiers = 0;
     data->state = LV_INDEV_STATE_RELEASED;
     data->key = 0;
 
@@ -941,24 +1114,37 @@ pager_read_new = r"""void TLoraPagerKeyboardInputDriver::readKeyboard(uint8_t ad
     uint8_t keyIndex = (event & 0x7F) - 1;
     uint32_t keyValue = 0;
     if (keyIndex == 20) {
-        modifiers ^= 0x02;
+        pagerKeyboardModifiers ^= 0x02;
+        pagerFunctionModifierActive = (pagerKeyboardModifiers & 0x02) != 0;
     } else if (keyIndex == 28) {
-        modifiers ^= 0x01;
+        pagerKeyboardModifiers ^= 0x01;
     } else if (keyIndex == 29) {
-        keyValue = (modifiers & 0x02) ? LV_KEY_ESC : LV_KEY_BACKSPACE;
-        modifiers = 0;
+        keyValue = (pagerKeyboardModifiers & 0x02) ? LV_KEY_ESC : LV_KEY_BACKSPACE;
+        pagerKeyboardModifiers = 0;
+        pagerFunctionModifierActive = false;
     } else if (keyIndex == 19) {
         lv_group_t *group = lv_indev_get_group(indev);
         lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;
         const bool oneLineTextArea = focused && lv_obj_check_type(focused, &lv_textarea_class) &&
                                        lv_textarea_get_one_line(focused);
-        keyValue = ((modifiers & 0x02) || oneLineTextArea) ? LV_KEY_NEXT : LV_KEY_ENTER;
-        modifiers = 0;
+#if defined(INPUTDRIVER_ROTARY_TYPE)
+        if (pagerKeyboardModifiers & 0x02) {
+            pagerClearFunctionModifier();
+            extern bool pagerHandleBack(lv_indev_t *indev);
+            pagerHandleBack(indev);
+            return;
+        }
+#endif
+        keyValue = ((pagerKeyboardModifiers & 0x02) || oneLineTextArea) ? LV_KEY_NEXT : LV_KEY_ENTER;
+        pagerKeyboardModifiers = 0;
+        pagerFunctionModifierActive = false;
     } else if (keyIndex < 31) {
-        const uint8_t mapIndex = (modifiers & 0x02) ? 2 : ((modifiers & 0x01) ? 1 : 0);
+        const uint8_t mapIndex = (pagerKeyboardModifiers & 0x02) ? 2 : ((pagerKeyboardModifiers & 0x01) ? 1 : 0);
         keyValue = static_cast<uint8_t>(pagerKeyboardMap[keyIndex][mapIndex]);
-        if (keyValue != 0)
-            modifiers = 0;
+        if (keyValue != 0) {
+            pagerKeyboardModifiers = 0;
+            pagerFunctionModifierActive = false;
+        }
     }
 
     if (keyValue != 0) {
@@ -971,6 +1157,16 @@ pager_read_new = r"""void TLoraPagerKeyboardInputDriver::readKeyboard(uint8_t ad
 if pager_read_old in data:
     data = data.replace(pager_read_old, pager_read_new, 1)
 elif pager_read_new not in data:
-    raise RuntimeError("unexpected meshtastic-device-ui Pager keyboard reader")
+    reader_start = data.find(b"void TLoraPagerKeyboardInputDriver::readKeyboard")
+    reader_end = data.find(b"// ---------- TDeckProKeyboardInputDriver", reader_start)
+    previous_reader = (
+        data[reader_start:reader_end] if reader_start >= 0 and reader_end >= 0 else b""
+    )
+    if (
+        b"static uint8_t modifiers = 0;" not in previous_reader
+        or b"LV_KEY_NEXT : LV_KEY_ENTER" not in previous_reader
+    ):
+        raise RuntimeError("unexpected meshtastic-device-ui Pager keyboard reader")
+    data = data[:reader_start] + pager_read_new + newline + data[reader_end:]
 
 keyboard_source.write_bytes(data)
