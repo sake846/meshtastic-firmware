@@ -201,7 +201,9 @@ if legacy_scroll:
     )
 focus_helper_marker = b"static void pagerApplyInsetFocus(lv_obj_t *obj)"
 if focus_helper_marker in data:
-    helper_start = data.index(focus_helper_marker)
+    helper_start = data.find(b"static void pagerNodeFocusEvent(lv_event_t *e)")
+    if helper_start < 0:
+        helper_start = data.index(focus_helper_marker)
     helper_end = data.index(focus_anchor, helper_start)
     data = data[:helper_start] + focus_helpers + data[helper_end:]
 elif data.count(focus_anchor) == 1:
@@ -371,6 +373,7 @@ data = device_gui.read_bytes()
 newline = b"\r\n" if b"\r\n" in data else b"\n"
 rotary_marker = b"class PagerRotaryInputDriver final"
 rotary_driver = """#if defined(INPUTDRIVER_ROTARY_TYPE)
+#include <Arduino.h>
 #include "RotaryEncoder.h"
 #include "ui.h"
 
@@ -497,11 +500,15 @@ class PagerRotaryInputDriver final : public InputDriver
             lv_group_set_default(inputGroup);
         }
         lv_indev_set_group(encoder, inputGroup);
+        attachInterrupt(INPUTDRIVER_ROTARY_UP, rotary_interrupt, CHANGE);
+        attachInterrupt(INPUTDRIVER_ROTARY_DOWN, rotary_interrupt, CHANGE);
     }
 
-    void task_handler() override
+  private:
+    static void rotary_interrupt()
     {
-        switch (rotary.process()) {
+        portENTER_CRITICAL_ISR(&rotaryLock);
+        switch (rotaryInstance->process()) {
         case RotaryEncoder::DIRECTION_CW:
             if (encoderDiff < INT16_MAX)
                 encoderDiff++;
@@ -513,9 +520,9 @@ class PagerRotaryInputDriver final : public InputDriver
         default:
             break;
         }
+        portEXIT_CRITICAL_ISR(&rotaryLock);
     }
 
-  private:
     static void encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
     {
         const bool buttonPressed = rotaryInstance && rotaryInstance->readButton() == RotaryEncoder::BUTTON_PRESSED;
@@ -534,8 +541,10 @@ class PagerRotaryInputDriver final : public InputDriver
             endTextEdit = true;
         }
 
+        portENTER_CRITICAL(&rotaryLock);
         const int16_t diff = encoderDiff;
         encoderDiff = 0;
+        portEXIT_CRITICAL(&rotaryLock);
         data->key = endTextEdit || suppressEncoderClick ? 0 : LV_KEY_ENTER;
         data->enc_diff = pagerMoveFocus(group, diff) ? 0 : diff;
         data->state = buttonPressed && !suppressEncoderClick ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
@@ -546,6 +555,7 @@ class PagerRotaryInputDriver final : public InputDriver
     RotaryEncoder rotary;
     inline static RotaryEncoder *rotaryInstance = nullptr;
     inline static int16_t encoderDiff = 0;
+    inline static portMUX_TYPE rotaryLock = portMUX_INITIALIZER_UNLOCKED;
     inline static bool suppressEncoderClick = false;
 };
 #endif
@@ -645,10 +655,10 @@ task_patch = (
     + newline
     + b"};"
 )
-if b"pagerRotaryDriver->task_handler();" not in data:
-    if data.count(task_anchor) != 1:
-        raise RuntimeError("unexpected meshtastic-device-ui DeviceGUI task handler")
-    data = data.replace(task_anchor, task_patch, 1)
+if task_patch in data:
+    data = data.replace(task_patch, task_anchor, 1)
+elif data.count(task_anchor) != 1:
+    raise RuntimeError("unexpected meshtastic-device-ui DeviceGUI task handler")
 
 device_gui.write_bytes(data)
 
