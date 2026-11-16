@@ -51,6 +51,18 @@ if b"pagerMUIBootWidth" not in data:
         raise RuntimeError("unexpected meshtastic-device-ui boot initialization")
     data = data.replace(boot_anchor, boot_resize, 1)
 
+boot_version_anchor = (
+    b"        lv_label_set_text(objects.firmware_label, firmware_version);" + newline
+)
+boot_version_patch = (
+    b"        lv_label_set_text(objects.firmware_label, "
+    b'"v2.8.2.d5f1619 +");' + newline
+)
+if b'"v2.8.2.d5f1619 +"' not in data:
+    if data.count(boot_version_anchor) != 1:
+        raise RuntimeError("unexpected meshtastic-device-ui boot version label")
+    data = data.replace(boot_version_anchor, boot_version_patch, 1)
+
 if b"pagerMUIScreens" not in data:
     if data.count(screens_anchor) != 1:
         raise RuntimeError("unexpected meshtastic-device-ui screen initialization")
@@ -236,15 +248,21 @@ focus_patch = (
     + newline
     + b"    if (lv_group_t *group = lv_group_get_default()) {"
     + newline
-    + b"        lv_obj_t *mapButtons[] = {objects.nav_button, objects.arrow_up_button, objects.arrow_left_button,"
+    + b"        lv_obj_t *mapButtons[] = {objects.gps_lock_button, objects.zoom_in_button, objects.zoom_out_button,"
     + newline
-    + b"                                  objects.arrow_right_button, objects.arrow_down_button, objects.gps_lock_button,"
+    + b"                                  objects.arrow_up_button, objects.arrow_left_button, objects.nav_button,"
     + newline
-    + b"                                  objects.zoom_in_button, objects.zoom_out_button};"
+    + b"                                  objects.arrow_right_button, objects.arrow_down_button};"
     + newline
     + b"        for (lv_obj_t *button : mapButtons) {"
     + newline
     + b"            lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);"
+    + newline
+    + b"            lv_group_remove_obj(button);"
+    + newline
+    + b"        }"
+    + newline
+    + b"        for (lv_obj_t *button : mapButtons) {"
     + newline
     + b"            lv_group_add_obj(group, button);"
     + newline
@@ -398,7 +416,7 @@ map_patch = r"""#if defined(INPUTDRIVER_ROTARY_TYPE)
             lv_obj_clear_flag(objects.zoom_in_button, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(objects.zoom_out_button, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(objects.map_osd_panel, LV_OBJ_FLAG_HIDDEN);
-            lv_group_focus_obj(objects.nav_button);
+            lv_group_focus_obj(objects.gps_lock_button);
             return;
         }
 #endif
@@ -414,6 +432,42 @@ if (
     if data.count(map_anchor) != 1:
         raise RuntimeError("unexpected meshtastic-device-ui map button handling")
     data = data.replace(map_anchor, map_patch + map_anchor, 1)
+
+nav_focus = b"lv_group_focus_obj(objects.nav_button);"
+map_start_focus = b"lv_group_focus_obj(objects.gps_lock_button);"
+if nav_focus in data:
+    if data.count(nav_focus) != 1:
+        raise RuntimeError("unexpected meshtastic-device-ui map focus entry")
+    data = data.replace(nav_focus, map_start_focus, 1)
+
+last_heard_anchor = (
+    b"            if (lv_group_ll && act)"
+    + newline
+    + b"                _lv_ll_move_before(lv_group_ll, act, _lv_ll_get_next(lv_group_ll, topNodeLL));"
+)
+last_heard_patch = (
+    last_heard_anchor
+    + newline
+    + b"#if defined(INPUTDRIVER_ROTARY_TYPE)"
+    + newline
+    + b"            if (THIS->activePanel == objects.nodes_panel) {"
+    + newline
+    + b"                lv_group_t *group = lv_group_get_default();"
+    + newline
+    + b"                lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;"
+    + newline
+    + b"                if (focused && lv_obj_get_parent(focused) == it->second)"
+    + newline
+    + b"                    lv_obj_scroll_to_view(focused, LV_ANIM_ON);"
+    + newline
+    + b"            }"
+    + newline
+    + b"#endif"
+)
+if b"lv_obj_scroll_to_view(focused, LV_ANIM_ON);" not in data:
+    if data.count(last_heard_anchor) != 1:
+        raise RuntimeError("unexpected meshtastic-device-ui last-heard ordering")
+    data = data.replace(last_heard_anchor, last_heard_patch, 1)
 
 source.write_bytes(data)
 
