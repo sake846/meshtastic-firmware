@@ -232,6 +232,28 @@ focus_patch = (
     + newline
     + b"    }"
     + newline
+    + b"#if defined(INPUTDRIVER_ROTARY_TYPE)"
+    + newline
+    + b"    if (lv_group_t *group = lv_group_get_default()) {"
+    + newline
+    + b"        lv_obj_t *mapButtons[] = {objects.nav_button, objects.arrow_up_button, objects.arrow_left_button,"
+    + newline
+    + b"                                  objects.arrow_right_button, objects.arrow_down_button, objects.gps_lock_button,"
+    + newline
+    + b"                                  objects.zoom_in_button, objects.zoom_out_button};"
+    + newline
+    + b"        for (lv_obj_t *button : mapButtons) {"
+    + newline
+    + b"            lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);"
+    + newline
+    + b"            lv_group_add_obj(group, button);"
+    + newline
+    + b"        }"
+    + newline
+    + b"    }"
+    + newline
+    + b"#endif"
+    + newline
     + b"    lv_obj_set_width(objects.settings_user_long_textarea, LV_PCT(80));"
     + newline
     + b"    lv_obj_set_width(objects.settings_wifi_ssid_textarea, LV_PCT(80));"
@@ -362,6 +384,36 @@ if b"pagerSetActiveMenuButton(b);" not in data:
     if data.count(active_button_anchor) != 1:
         raise RuntimeError("unexpected meshtastic-device-ui active menu button")
     data = data.replace(active_button_anchor, active_button_patch, 1)
+
+map_anchor = b"        if (THIS->activePanel == objects.map_panel) {" + newline
+map_patch = r"""#if defined(INPUTDRIVER_ROTARY_TYPE)
+        lv_indev_t *indev = lv_indev_active();
+        if (indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER) {
+            if (THIS->activePanel != objects.map_panel) {
+                THIS->ui_set_active(objects.map_button, objects.map_panel, objects.top_map_panel);
+                THIS->loadMap();
+            }
+            lv_obj_clear_flag(objects.navigation_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(objects.gps_lock_button, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(objects.zoom_in_button, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(objects.zoom_out_button, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(objects.map_osd_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_group_focus_obj(objects.nav_button);
+            return;
+        }
+#endif
+""".replace("\n", newline.decode()).encode()
+if b"lv_obj_t *mapButtons[]" not in data:
+    raise RuntimeError("map navigation buttons were not registered")
+if (
+    b"lv_indev_t *indev = lv_indev_active();"
+    + newline
+    + b"        if (indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER) {"
+    not in data
+):
+    if data.count(map_anchor) != 1:
+        raise RuntimeError("unexpected meshtastic-device-ui map button handling")
+    data = data.replace(map_anchor, map_patch + map_anchor, 1)
 
 source.write_bytes(data)
 
