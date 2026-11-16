@@ -576,6 +576,8 @@ class PagerRotaryInputDriver final : public InputDriver
         const int16_t diff = encoderDiff;
         encoderDiff = 0;
         portEXIT_CRITICAL(&rotaryLock);
+        if (diff || buttonPressed)
+            lv_display_trigger_activity(lv_indev_get_display(indev));
         data->key = suppressEncoderClick ? 0 : LV_KEY_ENTER;
         data->enc_diff = pagerMoveFocus(group, diff) ? 0 : diff;
         data->state = buttonPressed && !suppressEncoderClick ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
@@ -865,6 +867,7 @@ pager_read_new = r"""void TLoraPagerKeyboardInputDriver::readKeyboard(uint8_t ad
         if ((event & 0x80) == 0)
             continue;
 
+        lv_display_trigger_activity(lv_indev_get_display(indev));
         uint8_t keyIndex = (event & 0x7F) - 1;
         uint32_t keyValue = 0;
         lv_group_t *group = lv_indev_get_group(indev);
