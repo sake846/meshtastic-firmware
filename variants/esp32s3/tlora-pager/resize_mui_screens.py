@@ -285,6 +285,35 @@ focus_patch = (
     + b"    lv_obj_set_width(objects.setup_user_long_textarea, LV_PCT(80));"
     + newline
 )
+
+node_order_patch = r"""    // Keep node rows in last-heard order.
+    lv_obj_t **children = objects.nodes_panel->spec_attr->children;
+    int last = objects.nodes_panel->spec_attr->child_cnt - 1;
+    int i = last;
+    if (lastHeard) {
+        while (i > 1) {
+            if (lastHeard <= (time_t)(children[i - 1]->LV_OBJ_IDX(node_lh_idx)->user_data))
+                break;
+            i--;
+        }
+        if (i >= 1 && i < last)
+            lv_obj_move_to_index(p, i);
+    }
+
+""".replace("\n", newline.decode()).encode()
+if b"    // Keep node rows in last-heard order." not in data:
+    previous_marker = b"    // Keep node focus order aligned with the visible list"
+    if previous_marker in data:
+        node_order_start = data.index(previous_marker)
+        node_order_end = data.index(b"    if (!nodesChanged) {", node_order_start)
+        data = data[:node_order_start] + node_order_patch + data[node_order_end:]
+    else:
+        node_order_start = data.index(
+            b"    // move node into new position within nodePanel"
+        )
+        node_order_end = data.index(b"    if (!nodesChanged) {", node_order_start)
+        data = data[:node_order_start] + node_order_patch + data[node_order_end:]
+
 focus_block = focus_patch[
     len(b"void TFTView_320x240::apply_hotfix(void)" + newline + b"{" + newline) :
 ]
@@ -505,6 +534,56 @@ static int pagerMenuButtonIndex(lv_obj_t *obj)
     return -1;
 }
 
+static lv_obj_t *pagerNodeButtonInRow(lv_group_t *group, lv_obj_t *row)
+{
+    if (!row || lv_obj_get_parent(row) != objects.nodes_panel)
+        return nullptr;
+    for (lv_obj_t *parent = row; parent; parent = lv_obj_get_parent(parent)) {
+        if (lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN))
+            return nullptr;
+    }
+    for (uint32_t i = 0; i < lv_obj_get_child_count(row); ++i) {
+        lv_obj_t *child = lv_obj_get_child(row, i);
+        if (lv_obj_check_type(child, &lv_button_class) && lv_obj_get_group(child) == group &&
+            !(lv_obj_get_state(child) & LV_STATE_DISABLED))
+            return child;
+    }
+    return nullptr;
+}
+
+static bool pagerMoveNodeFocus(lv_group_t *group, int16_t diff)
+{
+    lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;
+    lv_obj_t *focusedRow = focused ? lv_obj_get_parent(focused) : nullptr;
+    if (pagerNodeButtonInRow(group, focusedRow) != focused)
+        return false;
+
+    int count = 0;
+    int current = -1;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(objects.nodes_panel); ++i) {
+        lv_obj_t *button = pagerNodeButtonInRow(group, lv_obj_get_child(objects.nodes_panel, i));
+        if (!button)
+            continue;
+        if (button == focused)
+            current = count;
+        ++count;
+    }
+    if (current < 0 || count == 0)
+        return false;
+
+    int targetIndex = (current + diff % count + count) % count;
+    for (uint32_t i = 0; i < lv_obj_get_child_count(objects.nodes_panel); ++i) {
+        lv_obj_t *button = pagerNodeButtonInRow(group, lv_obj_get_child(objects.nodes_panel, i));
+        if (!button)
+            continue;
+        if (targetIndex-- == 0) {
+            lv_group_focus_obj(button);
+            break;
+        }
+    }
+    return true;
+}
+
 static lv_obj_t *pagerMenuButtonAt(int index)
 {
     switch (index) {
@@ -584,6 +663,9 @@ static bool pagerMoveFocus(lv_group_t *group, int16_t diff)
 {
     if (!group || !diff)
         return false;
+
+    if (pagerMoveNodeFocus(group, diff))
+        return true;
 
     if (pagerMenuButtonIndex(lv_group_get_focused(group)) >= 0) {
         lv_group_set_editing(group, false);
