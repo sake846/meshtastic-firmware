@@ -438,9 +438,37 @@ static void pagerFocusMenuStep(lv_group_t *group, int direction)
 bool pagerHandleBack(lv_indev_t *indev)
 {
     lv_group_t *group = indev ? lv_indev_get_group(indev) : nullptr;
-    if (!group || lv_screen_active() != objects.main_screen || !pagerMenuButtonAvailable(pagerActiveMenuButton))
+    if (!group)
         return false;
 
+    lv_obj_t *focused = lv_group_get_focused(group);
+    lv_obj_t *screen = lv_screen_active();
+
+    lv_obj_t *cancelButtons[] = {
+        objects.obj2__cancel_button_w, objects.obj3__cancel_button_w, objects.obj4__cancel_button_w,
+        objects.obj5__cancel_button_w, objects.obj6__cancel_button_w, objects.obj7__cancel_button_w,
+        objects.obj8__cancel_button_w, objects.obj9__cancel_button_w, objects.obj10__cancel_button_w,
+        objects.obj11__cancel_button_w, objects.obj12__cancel_button_w, objects.obj13__cancel_button_w,
+        objects.obj14__cancel_button_w, objects.obj15__cancel_button_w, objects.obj16__cancel_button_w,
+        objects.obj17__cancel_button_w, objects.obj18__cancel_button_w, objects.obj21__cancel_button_w,
+        objects.obj27__cancel_button_w,
+    };
+    for (lv_obj_t *parent = focused; parent && parent != screen; parent = lv_obj_get_parent(parent)) {
+        for (lv_obj_t *button : cancelButtons) {
+            for (lv_obj_t *ancestor = button; ancestor && ancestor != screen; ancestor = lv_obj_get_parent(ancestor)) {
+                if (lv_obj_has_flag(ancestor, LV_OBJ_FLAG_HIDDEN) || lv_obj_has_state(ancestor, LV_STATE_DISABLED))
+                    break;
+                if (ancestor == parent) {
+                    lv_obj_send_event(button, LV_EVENT_CLICKED, nullptr);
+                    return true;
+                }
+            }
+        }
+    }
+
+    if (screen != objects.main_screen || !pagerMenuButtonAvailable(pagerActiveMenuButton) ||
+        pagerMenuButtonIndex(focused) >= 0)
+        return false;
     lv_group_set_editing(group, false);
     lv_group_focus_obj(pagerActiveMenuButton);
     return true;
@@ -526,26 +554,29 @@ class PagerRotaryInputDriver final : public InputDriver
     static void encoder_read(lv_indev_t *indev, lv_indev_data_t *data)
     {
         const bool buttonPressed = rotaryInstance && rotaryInstance->readButton() == RotaryEncoder::BUTTON_PRESSED;
-        bool endTextEdit = false;
         lv_group_t *group = indev ? lv_indev_get_group(indev) : nullptr;
         if (buttonPressed && !suppressEncoderClick && pagerFunctionModifierActive) {
             pagerClearFunctionModifier();
-            pagerHandleBack(indev);
+            if (!pagerHandleBack(indev) && group) {
+                lv_group_send_data(group, LV_KEY_ESC);
+                lv_obj_t *target = lv_group_get_focused(group);
+                if (target)
+                    lv_obj_send_event(target, LV_EVENT_CANCEL, indev);
+            }
             suppressEncoderClick = true;
         }
         lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;
-        if (buttonPressed && !suppressEncoderClick && group && lv_group_get_editing(group) && focused &&
-            lv_obj_check_type(focused, &lv_textarea_class)) {
+        if (buttonPressed && !suppressEncoderClick && group && focused && lv_obj_check_type(focused, &lv_textarea_class)) {
             lv_group_set_editing(group, false);
+            lv_group_focus_next(group);
             suppressEncoderClick = true;
-            endTextEdit = true;
         }
 
         portENTER_CRITICAL(&rotaryLock);
         const int16_t diff = encoderDiff;
         encoderDiff = 0;
         portEXIT_CRITICAL(&rotaryLock);
-        data->key = endTextEdit || suppressEncoderClick ? 0 : LV_KEY_ENTER;
+        data->key = suppressEncoderClick ? 0 : LV_KEY_ENTER;
         data->enc_diff = pagerMoveFocus(group, diff) ? 0 : diff;
         data->state = buttonPressed && !suppressEncoderClick ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
         if (!buttonPressed)
@@ -702,8 +733,9 @@ keyboard_helpers = r"""static uint8_t pagerKeyboardReadRegister(uint8_t address,
 {
     Wire.beginTransmission(address);
     Wire.write(reg);
-    Wire.endTransmission();
-    if (Wire.requestFrom(address, static_cast<uint8_t>(1)) == 0)
+    const uint8_t status = Wire.endTransmission(false);
+    const size_t count = Wire.requestFrom(address, static_cast<uint8_t>(1));
+    if (status != 0 || count == 0)
         return 0;
     return Wire.read();
 }
@@ -713,7 +745,9 @@ static void pagerKeyboardWriteRegister(uint8_t address, uint8_t reg, uint8_t val
     Wire.beginTransmission(address);
     Wire.write(reg);
     Wire.write(value);
-    Wire.endTransmission();
+    // Release the Wire lock if its buffers were removed during bus recovery.
+    if (Wire.endTransmission() == 4)
+        Wire.requestFrom(address, static_cast<uint8_t>(1));
 }
 
 static uint8_t pagerKeyboardModifiers = 0;
@@ -813,56 +847,66 @@ pager_read_old = r"""void TLoraPagerKeyboardInputDriver::readKeyboard(uint8_t ad
 ).encode()
 pager_read_new = r"""void TLoraPagerKeyboardInputDriver::readKeyboard(uint8_t address, lv_indev_t *indev, lv_indev_data_t *data)
 {
+    static bool releasePending = false;
     data->state = LV_INDEV_STATE_RELEASED;
     data->key = 0;
 
-    if ((pagerKeyboardReadRegister(address, 0x03) & 0x0F) == 0)
+    if (releasePending) {
+        releasePending = false;
+        data->continue_reading = true;
         return;
+    }
 
-    uint8_t event = pagerKeyboardReadRegister(address, 0x04);
-    if ((event & 0x80) == 0)
+    uint8_t count = pagerKeyboardReadRegister(address, 0x03) & 0x0F;
+    if (!count)
         return;
+    while (count--) {
+        uint8_t event = pagerKeyboardReadRegister(address, 0x04);
+        if ((event & 0x80) == 0)
+            continue;
 
-    uint8_t keyIndex = (event & 0x7F) - 1;
-    uint32_t keyValue = 0;
-    if (keyIndex == 20) {
-        pagerKeyboardModifiers ^= 0x02;
-        pagerFunctionModifierActive = (pagerKeyboardModifiers & 0x02) != 0;
-    } else if (keyIndex == 28) {
-        pagerKeyboardModifiers ^= 0x01;
-    } else if (keyIndex == 29) {
-        keyValue = (pagerKeyboardModifiers & 0x02) ? LV_KEY_ESC : LV_KEY_BACKSPACE;
-        pagerKeyboardModifiers = 0;
-        pagerFunctionModifierActive = false;
-    } else if (keyIndex == 19) {
+        uint8_t keyIndex = (event & 0x7F) - 1;
+        uint32_t keyValue = 0;
         lv_group_t *group = lv_indev_get_group(indev);
         lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;
-        const bool oneLineTextArea = focused && lv_obj_check_type(focused, &lv_textarea_class) &&
-                                       lv_textarea_get_one_line(focused);
-#if defined(INPUTDRIVER_ROTARY_TYPE)
-        if (pagerKeyboardModifiers & 0x02) {
-            pagerClearFunctionModifier();
-            extern bool pagerHandleBack(lv_indev_t *indev);
-            pagerHandleBack(indev);
-            return;
-        }
-#endif
-        keyValue = ((pagerKeyboardModifiers & 0x02) || oneLineTextArea) ? LV_KEY_NEXT : LV_KEY_ENTER;
-        pagerKeyboardModifiers = 0;
-        pagerFunctionModifierActive = false;
-    } else if (keyIndex < 31) {
-        const uint8_t mapIndex = (pagerKeyboardModifiers & 0x02) ? 2 : ((pagerKeyboardModifiers & 0x01) ? 1 : 0);
-        keyValue = static_cast<uint8_t>(pagerKeyboardMap[keyIndex][mapIndex]);
-        if (keyValue != 0) {
+        const bool textArea = focused && lv_obj_check_type(focused, &lv_textarea_class);
+        if (keyIndex == 20) {
+            pagerKeyboardModifiers ^= 0x02;
+            pagerFunctionModifierActive = (pagerKeyboardModifiers & 0x02) != 0;
+        } else if (keyIndex == 28) {
+            pagerKeyboardModifiers ^= 0x01;
+        } else if (keyIndex == 19 || keyIndex == 29) {
+            const bool back = !textArea || (pagerKeyboardModifiers & 0x02);
             pagerKeyboardModifiers = 0;
             pagerFunctionModifierActive = false;
+            if (back) {
+#if defined(INPUTDRIVER_ROTARY_TYPE)
+                extern bool pagerHandleBack(lv_indev_t *indev);
+                if (pagerHandleBack(indev))
+                    continue;
+#endif
+                keyValue = LV_KEY_ESC;
+            } else {
+                keyValue = keyIndex == 19 ? LV_KEY_ENTER : LV_KEY_BACKSPACE;
+            }
+        } else if (keyIndex < 31) {
+            const uint8_t mapIndex = (pagerKeyboardModifiers & 0x02) ? 2 : ((pagerKeyboardModifiers & 0x01) ? 1 : 0);
+            keyValue = static_cast<uint8_t>(pagerKeyboardMap[keyIndex][mapIndex]);
+            if (keyValue != 0) {
+                pagerKeyboardModifiers = 0;
+                pagerFunctionModifierActive = false;
+            }
+        }
+
+        if (keyValue != 0) {
+            data->key = keyValue;
+            data->state = LV_INDEV_STATE_PRESSED;
+            data->continue_reading = true;
+            releasePending = true;
+            return;
         }
     }
-
-    if (keyValue != 0) {
-        data->key = keyValue;
-        data->state = LV_INDEV_STATE_PRESSED;
-    }
+    pagerKeyboardWriteRegister(address, 0x02, 0x01);
 }""".replace(
     "\n", newline.decode()
 ).encode()
@@ -874,7 +918,7 @@ elif pager_read_new not in data:
     previous_reader = (
         data[reader_start:reader_end] if reader_start >= 0 and reader_end >= 0 else b""
     )
-    if (
+    if b"pagerKeyboardReadRegister(address, 0x03)" not in previous_reader and (
         b"static uint8_t modifiers = 0;" not in previous_reader
         or b"LV_KEY_NEXT : LV_KEY_ENTER" not in previous_reader
     ):
@@ -882,3 +926,27 @@ elif pager_read_new not in data:
     data = data[:reader_start] + pager_read_new + newline + data[reader_end:]
 
 keyboard_source.write_bytes(data)
+
+sensor_source = library.parent / "SensorLib" / "src" / "bosch" / "bhi260x" / "bhy2.c"
+sensor_data = sensor_source.read_bytes()
+sensor_newline = b"\r\n" if b"\r\n" in sensor_data else b"\n"
+
+copy_old = b"static int8_t parse_fifo_support(struct bhy2_fifo_buffer *fifo_buf)\n{\n    uint8_t i;"
+copy_new = copy_old.replace(b"uint8_t i;", b"uint32_t i;")
+event_old = b"""            default:
+                rslt = get_callback_info(tmp_sensor_id, &info, dev);
+                rslt = check_return_value(rslt);"""
+event_new = event_old + b"""
+                if (dev->event_size[tmp_sensor_id] == 0)
+                    return BHY2_E_INVALID_PARAM;"""
+
+for old, new in ((copy_old, copy_new), (event_old, event_new)):
+    old = old.replace(b"\n", sensor_newline)
+    new = new.replace(b"\n", sensor_newline)
+    if sensor_data.count(new) == 1:
+        continue
+    if sensor_data.count(old) != 1:
+        raise RuntimeError("unexpected SensorLib BHI260AP FIFO parser")
+    sensor_data = sensor_data.replace(old, new, 1)
+
+sensor_source.write_bytes(sensor_data)
