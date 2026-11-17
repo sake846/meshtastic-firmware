@@ -243,6 +243,10 @@ focus_patch = (
     + newline
     + b"{"
     + newline
+    + b"    lv_obj_set_style_flex_flow(objects.home_container, LV_FLEX_FLOW_ROW_WRAP, LV_PART_MAIN | LV_STATE_FOCUSED);"
+    + newline
+    + b"    lv_obj_set_style_flex_cross_place(objects.home_container, LV_FLEX_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_FOCUSED);"
+    + newline
     + b"    lv_obj_t *pagerFocusScreens[] = {objects.main_screen, objects.boot_screen, objects.blank_screen,"
     + newline
     + b"                                       objects.lock_screen, objects.calibration_screen};"
