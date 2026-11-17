@@ -263,6 +263,8 @@ focus_patch = (
     + newline
     + b"    }"
     + newline
+    + b"    pagerApplyScrollOnFocus(objects.home_container);"
+    + newline
     + b"    pagerApplyScrollOnFocus(objects.groups_panel);"
     + newline
     + b"    pagerApplyScrollOnFocus(objects.settings_channel_panel);"
@@ -701,18 +703,15 @@ static bool pagerFocusTargetAvailable(lv_obj_t *obj)
     if (!obj || obj == objects.home_container)
         return false;
 
-    bool inHomeContainer = false;
     bool inScrollablePanel = false;
     for (lv_obj_t *parent = obj; parent; parent = lv_obj_get_parent(parent)) {
         if (lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN))
             return false;
-        if (parent == objects.home_container)
-            inHomeContainer = true;
-        else if (parent != obj && lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE))
+        if (parent != obj && lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE))
             inScrollablePanel = true;
     }
     return lv_obj_is_visible(obj) ||
-           (lv_obj_get_screen(obj) == lv_screen_active() && !inHomeContainer && inScrollablePanel);
+           (lv_obj_get_screen(obj) == lv_screen_active() && inScrollablePanel);
 }
 
 static void pagerFocusContentStep(lv_group_t *group, int direction)
