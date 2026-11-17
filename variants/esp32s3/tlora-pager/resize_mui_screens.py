@@ -164,6 +164,21 @@ static void pagerApplyInsetFocusChildCreated(lv_event_t *e)
     pagerApplyInsetFocus(static_cast<lv_obj_t *>(lv_event_get_param(e)));
 }
 
+static lv_obj_tree_walk_res_t pagerApplyScrollOnFocusWalk(lv_obj_t *obj, void *data)
+{
+    lv_group_t *group = static_cast<lv_group_t *>(data);
+    if (obj && group && lv_obj_get_group(obj) == group)
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+    return LV_OBJ_TREE_WALK_NEXT;
+}
+
+static void pagerApplyScrollOnFocus(lv_obj_t *panel)
+{
+    lv_group_t *group = lv_group_get_default();
+    if (panel && group)
+        lv_obj_tree_walk(panel, pagerApplyScrollOnFocusWalk, group);
+}
+
 """.replace("\n", newline.decode()).encode()
 if legacy_scroll:
     pager_scroll_helper = r"""static void pagerScrollPanelKey(lv_event_t *e)
@@ -243,6 +258,14 @@ focus_patch = (
     + b"        }"
     + newline
     + b"    }"
+    + newline
+    + b"    pagerApplyScrollOnFocus(objects.groups_panel);"
+    + newline
+    + b"    pagerApplyScrollOnFocus(objects.settings_channel_panel);"
+    + newline
+    + b"    pagerApplyScrollOnFocus(objects.tab_page_basic_settings);"
+    + newline
+    + b"    pagerApplyScrollOnFocus(objects.tab_page_tools);"
     + newline
     + b"#if defined(INPUTDRIVER_ROTARY_TYPE)"
     + newline
@@ -584,6 +607,73 @@ static bool pagerMoveNodeFocus(lv_group_t *group, int16_t diff)
     return true;
 }
 
+static lv_obj_t *pagerMapFocusButtonAt(int index)
+{
+    switch (index) {
+    case 0: return objects.gps_lock_button;
+    case 1: return objects.zoom_in_button;
+    case 2: return objects.zoom_out_button;
+    case 3: return objects.arrow_up_button;
+    case 4: return objects.arrow_left_button;
+    case 5: return objects.nav_button;
+    case 6: return objects.arrow_right_button;
+    case 7: return objects.arrow_down_button;
+    default: return nullptr;
+    }
+}
+
+static int pagerMapFocusButtonIndex(lv_obj_t *obj)
+{
+    for (int i = 0; i < 8; ++i) {
+        if (pagerMapFocusButtonAt(i) == obj)
+            return i;
+    }
+    return -1;
+}
+
+static bool pagerMapFocusButtonAvailable(lv_group_t *group, lv_obj_t *button)
+{
+    if (!button || lv_obj_get_group(button) != group || (lv_obj_get_state(button) & LV_STATE_DISABLED))
+        return false;
+    for (lv_obj_t *parent = button; parent; parent = lv_obj_get_parent(parent)) {
+        if (lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN))
+            return false;
+    }
+    return true;
+}
+
+static bool pagerMoveMapFocus(lv_group_t *group, int16_t diff)
+{
+    lv_obj_t *focused = group ? lv_group_get_focused(group) : nullptr;
+    if (pagerMapFocusButtonIndex(focused) < 0)
+        return false;
+
+    int count = 0;
+    int current = -1;
+    for (int i = 0; i < 8; ++i) {
+        lv_obj_t *button = pagerMapFocusButtonAt(i);
+        if (!pagerMapFocusButtonAvailable(group, button))
+            continue;
+        if (button == focused)
+            current = count;
+        ++count;
+    }
+    if (current < 0 || count == 0)
+        return false;
+
+    int targetIndex = (current + diff % count + count) % count;
+    for (int i = 0; i < 8; ++i) {
+        lv_obj_t *button = pagerMapFocusButtonAt(i);
+        if (!pagerMapFocusButtonAvailable(group, button))
+            continue;
+        if (targetIndex-- == 0) {
+            lv_group_focus_obj(button);
+            break;
+        }
+    }
+    return true;
+}
+
 static lv_obj_t *pagerMenuButtonAt(int index)
 {
     switch (index) {
@@ -663,6 +753,9 @@ static bool pagerMoveFocus(lv_group_t *group, int16_t diff)
 {
     if (!group || !diff)
         return false;
+
+    if (pagerMoveMapFocus(group, diff))
+        return true;
 
     if (pagerMoveNodeFocus(group, diff))
         return true;
