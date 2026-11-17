@@ -703,9 +703,12 @@ static bool pagerFocusTargetAvailable(lv_obj_t *obj)
     if (!obj || obj == objects.home_container)
         return false;
 
+    lv_obj_t *inactiveTab = lv_tabview_get_tab_active(objects.controller_tab_view) == 0
+                                ? objects.tab_page_tools
+                                : objects.tab_page_basic_settings;
     bool inScrollablePanel = false;
     for (lv_obj_t *parent = obj; parent; parent = lv_obj_get_parent(parent)) {
-        if (lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN))
+        if (parent == inactiveTab || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN))
             return false;
         if (parent != obj && lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE))
             inScrollablePanel = true;
