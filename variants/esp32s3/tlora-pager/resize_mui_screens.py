@@ -692,6 +692,55 @@ static bool pagerMenuButtonAvailable(lv_obj_t *button)
     return button && !lv_obj_has_flag(button, LV_OBJ_FLAG_HIDDEN) && !lv_obj_has_state(button, LV_STATE_DISABLED);
 }
 
+static bool pagerFocusTargetAvailable(lv_obj_t *obj)
+{
+    if (!obj || obj == objects.home_container)
+        return false;
+
+    bool inHomeContainer = false;
+    bool inScrollablePanel = false;
+    for (lv_obj_t *parent = obj; parent; parent = lv_obj_get_parent(parent)) {
+        if (lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN))
+            return false;
+        if (parent == objects.home_container)
+            inHomeContainer = true;
+        else if (parent != obj && lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE))
+            inScrollablePanel = true;
+    }
+    return lv_obj_is_visible(obj) ||
+           (lv_obj_get_screen(obj) == lv_screen_active() && !inHomeContainer && inScrollablePanel);
+}
+
+static void pagerFocusContentStep(lv_group_t *group, int direction)
+{
+    const uint32_t count = lv_group_get_obj_count(group);
+    if (!count)
+        return;
+
+    int current = -1;
+    lv_obj_t *focused = lv_group_get_focused(group);
+    for (uint32_t i = 0; i < count; ++i) {
+        if (lv_group_get_obj_by_index(group, i) == focused) {
+            current = static_cast<int>(i);
+            break;
+        }
+    }
+    if (current < 0)
+        current = direction > 0 ? -1 : 0;
+
+    for (uint32_t step = 1; step <= count; ++step) {
+        int index = (current + direction * static_cast<int>(step)) % static_cast<int>(count);
+        if (index < 0)
+            index += static_cast<int>(count);
+        lv_obj_t *candidate = lv_group_get_obj_by_index(group, static_cast<uint32_t>(index));
+        if (!candidate || (lv_obj_get_state(candidate) & LV_STATE_DISABLED) ||
+            pagerMenuButtonIndex(candidate) >= 0 || !pagerFocusTargetAvailable(candidate))
+            continue;
+        lv_group_focus_obj(candidate);
+        return;
+    }
+}
+
 static void pagerFocusMenuStep(lv_group_t *group, int direction)
 {
     int index = pagerMenuButtonIndex(lv_group_get_focused(group));
@@ -754,6 +803,22 @@ static bool pagerMoveFocus(lv_group_t *group, int16_t diff)
     if (!group || !diff)
         return false;
 
+    if (lv_screen_active() == objects.blank_screen)
+        return true;
+
+    lv_obj_t *scrollPanel = nullptr;
+    if (!lv_obj_has_flag(objects.settings_about_panel, LV_OBJ_FLAG_HIDDEN))
+        scrollPanel = objects.settings_about_panel;
+    else if (!lv_obj_has_flag(objects.tools_statistics_panel, LV_OBJ_FLAG_HIDDEN))
+        scrollPanel = objects.tools_statistics_panel;
+    else if (!lv_obj_has_flag(objects.tools_packet_log_panel, LV_OBJ_FLAG_HIDDEN))
+        scrollPanel = objects.tools_packet_log_panel;
+    if (scrollPanel) {
+        for (int16_t step = 0; step < abs(diff); ++step)
+            lv_obj_scroll_by_bounded(scrollPanel, 0, diff > 0 ? -80 : 80, LV_ANIM_ON);
+        return true;
+    }
+
     if (pagerMoveMapFocus(group, diff))
         return true;
 
@@ -777,15 +842,11 @@ static bool pagerMoveFocus(lv_group_t *group, int16_t diff)
         return false;
 
     while (diff > 0) {
-        lv_group_focus_next(group);
-        for (int i = 0; i < 6 && pagerMenuButtonIndex(lv_group_get_focused(group)) >= 0; ++i)
-            lv_group_focus_next(group);
+        pagerFocusContentStep(group, 1);
         --diff;
     }
     while (diff < 0) {
-        lv_group_focus_prev(group);
-        for (int i = 0; i < 6 && pagerMenuButtonIndex(lv_group_get_focused(group)) >= 0; ++i)
-            lv_group_focus_prev(group);
+        pagerFocusContentStep(group, -1);
         ++diff;
     }
     return true;
