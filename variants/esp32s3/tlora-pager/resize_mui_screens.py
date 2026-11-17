@@ -54,11 +54,16 @@ if b"pagerMUIBootWidth" not in data:
 boot_version_anchor = (
     b"        lv_label_set_text(objects.firmware_label, firmware_version);" + newline
 )
+boot_version = b'"v2.8.2.d5f1619 + MUI"'
 boot_version_patch = (
     b"        lv_label_set_text(objects.firmware_label, "
-    b'"v2.8.2.d5f1619 +");' + newline
+    + boot_version
+    + b");"
+    + newline
 )
-if b'"v2.8.2.d5f1619 +"' not in data:
+if b'"v2.8.2.d5f1619 +"' in data:
+    data = data.replace(b'"v2.8.2.d5f1619 +"', boot_version, 1)
+elif boot_version not in data:
     if data.count(boot_version_anchor) != 1:
         raise RuntimeError("unexpected meshtastic-device-ui boot version label")
     data = data.replace(boot_version_anchor, boot_version_patch, 1)
