@@ -51,17 +51,16 @@ if b"pagerMUIBootWidth" not in data:
         raise RuntimeError("unexpected meshtastic-device-ui boot initialization")
     data = data.replace(boot_anchor, boot_resize, 1)
 
-boot_version_anchor = (
-    b"        lv_label_set_text(objects.firmware_label, firmware_version);" + newline
+stale_boot_version = (
+    b'        lv_label_set_text(objects.firmware_label, "v2.8.2.d5f1619 +");' + newline
 )
-boot_version_patch = (
-    b"        lv_label_set_text(objects.firmware_label, "
-    b'"v2.8.2.d5f1619 +");' + newline
-)
-if b'"v2.8.2.d5f1619 +"' not in data:
-    if data.count(boot_version_anchor) != 1:
-        raise RuntimeError("unexpected meshtastic-device-ui boot version label")
-    data = data.replace(boot_version_anchor, boot_version_patch, 1)
+if stale_boot_version in data:
+    data = data.replace(
+        stale_boot_version,
+        b"        lv_label_set_text(objects.firmware_label, firmware_version);"
+        + newline,
+        1,
+    )
 
 if b"pagerMUIScreens" not in data:
     if data.count(screens_anchor) != 1:
@@ -102,7 +101,6 @@ if b"pagerMUICompactIcons" not in data:
         raise RuntimeError("unexpected meshtastic-device-ui navigation icon sizing")
     data = data.replace(icon_anchor, icon_patch, 1)
 
-legacy_scroll = b"void TFTView_320x240::ui_event_scroll_panel" not in data
 focus_anchor = b"void TFTView_320x240::apply_hotfix(void)" + newline
 focus_helpers = r"""static void pagerNodeFocusEvent(lv_event_t *e)
 {
@@ -180,8 +178,7 @@ static void pagerApplyScrollOnFocus(lv_obj_t *panel)
 }
 
 """.replace("\n", newline.decode()).encode()
-if legacy_scroll:
-    pager_scroll_helper = r"""static void pagerScrollPanelKey(lv_event_t *e)
+pager_scroll_helper = r"""static void pagerScrollPanelKey(lv_event_t *e)
 {
     const void *param = lv_event_get_param(e);
     lv_obj_t *target = static_cast<lv_obj_t *>(lv_event_get_target(e));
@@ -208,24 +205,24 @@ if legacy_scroll:
 }
 
 """.replace("\n", newline.decode()).encode()
-    focus_helpers = focus_helpers.replace(
-        b"static lv_obj_tree_walk_res_t pagerApplyInsetFocusWalk",
-        pager_scroll_helper + b"static lv_obj_tree_walk_res_t pagerApplyInsetFocusWalk",
-    )
-    focus_helpers = focus_helpers.replace(
-        b"    pagerApplyInsetFocus(obj);",
-        b"    pagerApplyInsetFocus(obj);"
-        + newline
-        + b"    if (obj) lv_obj_add_event_cb(obj, pagerScrollPanelKey, LV_EVENT_KEY, nullptr);",
-    )
-    focus_helpers = focus_helpers.replace(
-        b"    pagerApplyInsetFocus(static_cast<lv_obj_t *>(lv_event_get_param(e)));",
-        b"    lv_obj_t *obj = static_cast<lv_obj_t *>(lv_event_get_param(e));"
-        + newline
-        + b"    pagerApplyInsetFocus(obj);"
-        + newline
-        + b"    if (obj) lv_obj_add_event_cb(obj, pagerScrollPanelKey, LV_EVENT_KEY, nullptr);",
-    )
+focus_helpers = focus_helpers.replace(
+    b"static lv_obj_tree_walk_res_t pagerApplyInsetFocusWalk",
+    pager_scroll_helper + b"static lv_obj_tree_walk_res_t pagerApplyInsetFocusWalk",
+)
+focus_helpers = focus_helpers.replace(
+    b"    pagerApplyInsetFocus(obj);",
+    b"    pagerApplyInsetFocus(obj);"
+    + newline
+    + b"    if (obj) lv_obj_add_event_cb(obj, pagerScrollPanelKey, LV_EVENT_KEY, nullptr);",
+)
+focus_helpers = focus_helpers.replace(
+    b"    pagerApplyInsetFocus(static_cast<lv_obj_t *>(lv_event_get_param(e)));",
+    b"    lv_obj_t *obj = static_cast<lv_obj_t *>(lv_event_get_param(e));"
+    + newline
+    + b"    pagerApplyInsetFocus(obj);"
+    + newline
+    + b"    if (obj) lv_obj_add_event_cb(obj, pagerScrollPanelKey, LV_EVENT_KEY, nullptr);",
+)
 focus_helper_marker = b"static void pagerApplyInsetFocus(lv_obj_t *obj)"
 if focus_helper_marker in data:
     helper_start = data.find(b"static void pagerNodeFocusEvent(lv_event_t *e)")
@@ -363,74 +360,6 @@ elif (
     data = data.replace(focus_function, focus_function + focus_block, 1)
 else:
     raise RuntimeError("unexpected meshtastic-device-ui hotfix function")
-
-scroll_anchor = (
-    b"    // Define how many pixels to scroll per keypress"
-    + newline
-    + b"    const lv_coord_t scroll_step = 80;"
-    + newline
-    + newline
-    + b"    if (key == LV_KEY_DOWN) {"
-    + newline
-    + b"        lv_obj_scroll_by_bounded(panel, 0, -scroll_step, LV_ANIM_ON);"
-    + newline
-    + b"    } else if (key == LV_KEY_UP) {"
-    + newline
-    + b"        lv_obj_scroll_by_bounded(panel, 0, scroll_step, LV_ANIM_ON);"
-    + newline
-    + b"    }"
-    + newline
-    + b"    if (key == LV_KEY_ESC || key == LV_KEY_LEFT) {"
-)
-scroll_patch = (
-    b"    lv_indev_t *indev = lv_indev_active();"
-    + newline
-    + b"    const bool encoder = indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER;"
-    + newline
-    + b"    const lv_coord_t scroll_step = 80;"
-    + newline
-    + b"    if (encoder && key == LV_KEY_ENTER) {"
-    + newline
-    + b"        if (lv_group_t *group = lv_indev_get_group(indev))"
-    + newline
-    + b"            lv_group_set_editing(group, false);"
-    + newline
-    + b"        lv_event_stop_processing(e);"
-    + newline
-    + b"        return;"
-    + newline
-    + b"    }"
-    + newline
-    + b"    if (encoder && (key == LV_KEY_LEFT || key == LV_KEY_RIGHT)) {"
-    + newline
-    + b"        lv_obj_scroll_by_bounded(panel, 0, key == LV_KEY_RIGHT ? -scroll_step : scroll_step, LV_ANIM_ON);"
-    + newline
-    + b"        lv_event_stop_processing(e);"
-    + newline
-    + b"        return;"
-    + newline
-    + b"    }"
-    + newline
-    + b"    if (key == LV_KEY_DOWN) {"
-    + newline
-    + b"        lv_obj_scroll_by_bounded(panel, 0, -scroll_step, LV_ANIM_ON);"
-    + newline
-    + b"    } else if (key == LV_KEY_UP) {"
-    + newline
-    + b"        lv_obj_scroll_by_bounded(panel, 0, scroll_step, LV_ANIM_ON);"
-    + newline
-    + b"    }"
-    + newline
-    + b"    if (key == LV_KEY_ESC || key == LV_KEY_LEFT) {"
-)
-if (
-    b"const bool encoder = indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_ENCODER;"
-    not in data
-):
-    if data.count(scroll_anchor) == 1:
-        data = data.replace(scroll_anchor, scroll_patch, 1)
-    elif not legacy_scroll:
-        raise RuntimeError("unexpected meshtastic-device-ui scroll panel key handling")
 
 menu_focus_decl = (
     b"#if defined(INPUTDRIVER_ROTARY_TYPE)"
