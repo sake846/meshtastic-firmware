@@ -270,6 +270,12 @@ focus_patch = (
     + newline
     + b"    }"
     + newline
+    + b"    lv_obj_remove_state(objects.boot_logo_button, LV_STATE_FOCUSED);"
+    + newline
+    + b"    lv_obj_remove_state(objects.boot_logo_button, LV_STATE_FOCUS_KEY);"
+    + newline
+    + b"    lv_obj_remove_state(objects.boot_logo_button, LV_STATE_PRESSED);"
+    + newline
     + b"    pagerApplyScrollOnFocus(objects.home_container);"
     + newline
     + b"    pagerApplyScrollOnFocus(objects.groups_panel);"
@@ -519,19 +525,42 @@ if position_buffer_old in data:
 elif position_buffer_new not in data:
     raise RuntimeError("unexpected meshtastic-device-ui node position buffer")
 
-position_format_new = (
-    b"        sprintf(buf, \"%.5f%c %.5f%c %d%s MSL\", std::fabs(lat * 1e-7), lat >= 0 ? 'N' : 'S',"
-    + newline
-    + b"                std::fabs(lon * 1e-7), lon >= 0 ? 'E' : 'W', altU, units);"
+position_format_new = newline.join(
+    [
+        b"        int latSeconds = (int)round(lat * 1e-7 * 3600);",
+        b"        int latDegrees = latSeconds / 3600;",
+        b"        latSeconds = abs(latSeconds % 3600);",
+        b"        int latMinutes = latSeconds / 60;",
+        b"        latSeconds %= 60;",
+        b"        char latLetter = (lat > 0) ? 'N' : 'S';",
+        b"        int lonSeconds = (int)round(lon * 1e-7 * 3600);",
+        b"        int lonDegrees = lonSeconds / 3600;",
+        b"        lonSeconds = abs(lonSeconds % 3600);",
+        b"        int lonMinutes = lonSeconds / 60;",
+        b"        lonSeconds %= 60;",
+        b"        char lonLetter = (lon > 0) ? 'E' : 'W';",
+        '        sprintf(buf, "%c%02i° %2i\'%02i\\" %c%02i° %2i\'%02i\\" %d%s MSL",'.encode(
+            "utf-8"
+        ),
+        b"                latLetter, abs(latDegrees), latMinutes, latSeconds,",
+        b"                lonLetter, abs(lonDegrees), lonMinutes, lonSeconds, altU, units);",
+    ]
 )
 position_format_old = b'        sprintf(buf, "%.5f %.5f", lat * 1e-7, lon * 1e-7);'
 position_format_previous = (
     b'        sprintf(buf, "%.5f %.5f %d%s MSL", lat * 1e-7, lon * 1e-7, altU, units);'
 )
+position_format_hemisphere = (
+    b"        sprintf(buf, \"%.5f%c %.5f%c %d%s MSL\", std::fabs(lat * 1e-7), lat >= 0 ? 'N' : 'S',"
+    + newline
+    + b"                std::fabs(lon * 1e-7), lon >= 0 ? 'E' : 'W', altU, units);"
+)
 if position_format_old in data:
     data = data.replace(position_format_old, position_format_new, 1)
 elif position_format_previous in data:
     data = data.replace(position_format_previous, position_format_new, 1)
+elif position_format_hemisphere in data:
+    data = data.replace(position_format_hemisphere, position_format_new, 1)
 elif position_format_new not in data:
     raise RuntimeError("unexpected meshtastic-device-ui node position format")
 
