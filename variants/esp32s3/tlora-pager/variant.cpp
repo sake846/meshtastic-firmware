@@ -21,6 +21,8 @@ void earlyInitVariant()
     io.digitalWrite(EXPANDS_LORA_EN, HIGH);
     io.pinMode(EXPANDS_GPS_EN, OUTPUT);
     io.digitalWrite(EXPANDS_GPS_EN, HIGH);
+    io.pinMode(EXPANDS_KB_RST, OUTPUT);
+    io.digitalWrite(EXPANDS_KB_RST, HIGH);
     io.pinMode(EXPANDS_KB_EN, OUTPUT);
     io.digitalWrite(EXPANDS_KB_EN, HIGH);
     io.pinMode(EXPANDS_SD_EN, OUTPUT);
