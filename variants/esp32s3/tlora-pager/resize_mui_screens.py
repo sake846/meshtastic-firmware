@@ -123,7 +123,11 @@ static void pagerApplyInsetFocus(lv_obj_t *obj)
 {
     if (!obj)
         return;
-    if (lv_obj_check_type(obj, &lv_buttonmatrix_class)) {
+    if (obj == objects.boot_logo_button) {
+        const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
+        lv_obj_set_style_outline_width(obj, 0, focus);
+        lv_obj_set_style_border_width(obj, 0, focus);
+    } else if (lv_obj_check_type(obj, &lv_buttonmatrix_class)) {
         const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_ITEMS | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
         lv_obj_set_style_outline_width(obj, 0, focus);
         lv_obj_set_style_border_width(obj, 2, focus);
@@ -463,6 +467,248 @@ if b"lv_obj_scroll_to_view(focused, LV_ANIM_ON);" not in data:
     data = data.replace(last_heard_anchor, last_heard_patch, 1)
 
 source.write_bytes(data)
+
+data = source.read_bytes()
+newline = b"\r\n" if b"\r\n" in data else b"\n"
+node_name_old = (
+    b"    lv_obj_set_size(ln_lbl, LV_PCT(80), LV_SIZE_CONTENT);"
+    + newline
+    + b"    lv_label_set_long_mode(ln_lbl, LV_LABEL_LONG_SCROLL);"
+)
+node_name_new = (
+    b"    lv_obj_set_size(ln_lbl, LV_PCT(88), LV_SIZE_CONTENT);"
+    + newline
+    + b"    lv_label_set_long_mode(ln_lbl, LV_LABEL_LONG_SCROLL);"
+)
+node_name_previous = (
+    b"    lv_obj_set_size(ln_lbl, LV_PCT(88), LV_SIZE_CONTENT);"
+    + newline
+    + b"    lv_label_set_long_mode(ln_lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);"
+)
+if node_name_old in data:
+    data = data.replace(node_name_old, node_name_new, 1)
+elif node_name_previous in data:
+    data = data.replace(node_name_previous, node_name_new, 1)
+elif node_name_new not in data:
+    raise RuntimeError("unexpected meshtastic-device-ui node name label")
+
+position_width_old = b"    lv_obj_set_size(ui_PositionLabel, 120, LV_SIZE_CONTENT);"
+position_width_new = (
+    b"    lv_obj_set_size(ui_PositionLabel, LV_PCT(70), LV_SIZE_CONTENT);"
+)
+if position_width_old in data:
+    data = data.replace(position_width_old, position_width_new, 1)
+elif position_width_new not in data:
+    raise RuntimeError("unexpected meshtastic-device-ui node position label")
+
+position_scroll_old = (
+    b"    lv_label_set_long_mode(ui_PositionLabel, LV_LABEL_LONG_CLIP);"
+)
+position_scroll_new = (
+    b"    lv_label_set_long_mode(ui_PositionLabel, LV_LABEL_LONG_SCROLL_CIRCULAR);"
+)
+if position_scroll_old in data:
+    data = data.replace(position_scroll_old, position_scroll_new, 1)
+elif position_scroll_new not in data:
+    raise RuntimeError("unexpected meshtastic-device-ui node position scrolling")
+
+position_buffer_old = b"        char buf[32];"
+position_buffer_new = b"        char buf[48];"
+if position_buffer_old in data:
+    data = data.replace(position_buffer_old, position_buffer_new, 1)
+elif position_buffer_new not in data:
+    raise RuntimeError("unexpected meshtastic-device-ui node position buffer")
+
+position_format_new = (
+    b"        sprintf(buf, \"%.5f%c %.5f%c %d%s MSL\", std::fabs(lat * 1e-7), lat >= 0 ? 'N' : 'S',"
+    + newline
+    + b"                std::fabs(lon * 1e-7), lon >= 0 ? 'E' : 'W', altU, units);"
+)
+position_format_old = b'        sprintf(buf, "%.5f %.5f", lat * 1e-7, lon * 1e-7);'
+position_format_previous = (
+    b'        sprintf(buf, "%.5f %.5f %d%s MSL", lat * 1e-7, lon * 1e-7, altU, units);'
+)
+if position_format_old in data:
+    data = data.replace(position_format_old, position_format_new, 1)
+elif position_format_previous in data:
+    data = data.replace(position_format_previous, position_format_new, 1)
+elif position_format_new not in data:
+    raise RuntimeError("unexpected meshtastic-device-ui node position format")
+
+altitude_label_old = (
+    b"        if (sats)"
+    + newline
+    + b'            sprintf(buf, "%d%s MSL  %u sats", altU, units, sats);'
+    + newline
+    + b'        sprintf(buf, "%d%s MSL", altU, units);'
+    + newline
+    + b"        lv_label_set_text(panel->LV_OBJ_IDX(node_pos2_idx), buf);"
+)
+if altitude_label_old in data:
+    data = data.replace(altitude_label_old, b"", 1)
+elif b"lv_label_set_text(panel->LV_OBJ_IDX(node_pos2_idx), buf);" in data:
+    raise RuntimeError("unexpected meshtastic-device-ui node altitude label")
+
+position2_visible_old = (
+    b"        lv_obj_remove_flag(panel->LV_OBJ_IDX(node_pos2_idx), LV_OBJ_FLAG_HIDDEN);"
+)
+if position2_visible_old in data:
+    data = data.replace(position2_visible_old, b"", 1)
+
+source.write_bytes(data)
+
+
+def patch_ui_file(relative_path, replacements):
+    path = library / relative_path
+    contents = path.read_bytes()
+    line_ending = b"\r\n" if b"\r\n" in contents else b"\n"
+    for old, new, description in replacements:
+        old = old.replace(b"\n", line_ending)
+        new = new.replace(b"\n", line_ending)
+        if old in contents:
+            contents = contents.replace(old, new, 1)
+        elif new not in contents:
+            raise RuntimeError(f"unexpected meshtastic-device-ui {description}")
+    path.write_bytes(contents)
+
+
+patch_ui_file(
+    "include/graphics/common/MeshtasticView.h",
+    [
+        (
+            b"virtual void updateLastHeard(uint32_t nodeNum);",
+            b"virtual void updateLastHeard(uint32_t nodeNum, uint32_t receivedAt = 0);",
+            "last-heard declaration",
+        ),
+    ],
+)
+patch_ui_file(
+    "include/graphics/view/TFT/TFTView_320x240.h",
+    [
+        (
+            b"virtual void updateLastHeard(uint32_t nodeNum);",
+            b"virtual void updateLastHeard(uint32_t nodeNum, uint32_t receivedAt = 0);",
+            "Pager last-heard declaration",
+        ),
+    ],
+)
+patch_ui_file(
+    "source/graphics/common/MeshtasticView.cpp",
+    [
+        (
+            b"void MeshtasticView::updateLastHeard(uint32_t nodeNum) {}",
+            b"void MeshtasticView::updateLastHeard(uint32_t nodeNum, uint32_t receivedAt) {}",
+            "last-heard implementation",
+        ),
+        (
+            b"        updateLastHeard(p.from);",
+            b"",
+            "received-node timestamp",
+        ),
+        (
+            b"            updateLastHeard(p.to);",
+            b"",
+            "undelivered destination timestamp",
+        ),
+    ],
+)
+patch_ui_file(
+    "source/graphics/common/ViewController.cpp",
+    [
+        (
+            b'#include "util/LogMessage.h"\n#include <algorithm>',
+            b'#include "util/LogMessage.h"\n#include "UptimeClock.h"\n#include <algorithm>',
+            "uptime clock include",
+        ),
+        (
+            b"    view->updateLastHeard(p.from);",
+            b"    uint32_t receivedAt = p.rx_time;\n"
+            b"    if (!p.has_rx_time) {\n"
+            b"        const uint32_t nowUptime = Time::getUptimeSecs();\n"
+            b"        time_t now;\n"
+            b"        time(&now);\n"
+            b"        if (!receivedAt || receivedAt > nowUptime || now < (time_t)(nowUptime - receivedAt))\n"
+            b"            receivedAt = 0;\n"
+            b"        else\n"
+            b"            receivedAt = (uint32_t)(now - (nowUptime - receivedAt));\n"
+            b"    }\n"
+            b"    view->updateLastHeard(p.from, receivedAt);",
+            "packet last-heard timestamp",
+        ),
+    ],
+)
+patch_ui_file(
+    "source/graphics/TFT/TFTView_320x240.cpp",
+    [
+        (
+            b"void TFTView_320x240::ui_event_QrButton(lv_event_t *e)\n{",
+            b"void TFTView_320x240::ui_event_QrButton(lv_event_t *e)\n{\n"
+            b"    if (!lv_obj_has_flag(objects.home_show_qr_panel, LV_OBJ_FLAG_HIDDEN)) {\n"
+            b"        THIS->ui_event_CancelQrButton(e);\n"
+            b"        return;\n"
+            b"    }",
+            "home QR toggle",
+        ),
+        (
+            b"void TFTView_320x240::updateLastHeard(uint32_t nodeNum)",
+            b"void TFTView_320x240::updateLastHeard(uint32_t nodeNum, uint32_t receivedAt)",
+            "Pager last-heard method",
+        ),
+        (
+            b"        time_t lastHeard = (time_t)it->second->LV_OBJ_IDX(node_lh_idx)->user_data;\n"
+            b"        it->second->LV_OBJ_IDX(node_lh_idx)->user_data = (void *)curtime;\n"
+            b'        lv_label_set_text(it->second->LV_OBJ_IDX(node_lh_idx), _("now"));',
+            b"        time_t previousLastHeard = (time_t)it->second->LV_OBJ_IDX(node_lh_idx)->user_data;\n"
+            b"        time_t lastHeard = it->first == ownNode ? curtime\n"
+            b"                              : (receivedAt ? (time_t)receivedAt : previousLastHeard);\n"
+            b"        if (it->first != ownNode && (lastHeard == 0 || lastHeard > curtime))\n"
+            b"            return;\n"
+            b"        if (it->first != ownNode && previousLastHeard > lastHeard && previousLastHeard <= curtime)\n"
+            b"            lastHeard = previousLastHeard;\n"
+            b"        it->second->LV_OBJ_IDX(node_lh_idx)->user_data = (void *)lastHeard;\n"
+            b"        char buf[20];\n"
+            b"        lastHeardToString(lastHeard, buf);\n"
+            b"        lv_label_set_text(it->second->LV_OBJ_IDX(node_lh_idx), buf);",
+            "Pager last-heard timestamp formatting",
+        ),
+        (
+            b"            if (lastHeard > 0 && curtime - lastHeard >= secs_until_offline) {",
+            b"            if (previousLastHeard > 0 && previousLastHeard <= curtime &&\n"
+            b"                curtime - previousLastHeard >= secs_until_offline && lastHeard > 0 &&\n"
+            b"                curtime - lastHeard <= secs_until_offline) {",
+            "Pager online-node accounting",
+        ),
+        (
+            b"    // TODO: devices without actual time will report all nodes as lastseen = now\n"
+            b"    if (lastHeard) {\n"
+            b"        lastHeard = std::min(curtime, (time_t)lastHeard); // adapt values too large",
+            b"    if (lastHeard && (time_t)lastHeard <= curtime) {",
+            "initial node last-heard timestamp",
+        ),
+        (
+            b'    } else {\n        lv_label_set_text(ui_lastHeardLabel, "");\n    }',
+            b'    } else {\n        lastHeard = 0;\n        lv_label_set_text(ui_lastHeardLabel, "");\n    }',
+            "unknown node last-heard timestamp",
+        ),
+        (
+            b"        if (lastHeard) {\n"
+            b"            bool isOnline = lastHeardToString(lastHeard, buf);\n"
+            b"            lv_label_set_text(it.second->LV_OBJ_IDX(node_lh_idx), buf);\n"
+            b"            if (isOnline)\n"
+            b"                online++;\n"
+            b"        }",
+            b"        if (lastHeard && lastHeard <= curtime) {\n"
+            b"            bool isOnline = lastHeardToString(lastHeard, buf);\n"
+            b"            lv_label_set_text(it.second->LV_OBJ_IDX(node_lh_idx), buf);\n"
+            b"            if (isOnline)\n"
+            b"                online++;\n"
+            b"        } else {\n"
+            b'            lv_label_set_text(it.second->LV_OBJ_IDX(node_lh_idx), "");\n'
+            b"        }",
+            "periodic node last-heard timestamp",
+        ),
+    ],
+)
 
 device_gui = library / "source" / "graphics" / "DeviceGUI.cpp"
 if not device_gui.is_file():
