@@ -26,7 +26,7 @@ namespace
 {
 constexpr char CHANNEL_NAME[] = "QZSS-DCR";
 constexpr uint8_t NO_CHANNEL = UINT8_MAX;
-constexpr uint16_t MAX_UBX_PAYLOAD = 64;
+constexpr uint16_t MAX_UBX_PAYLOAD = 1024;
 constexpr uint32_t CRC24Q_POLY = 0x864CFB;
 constexpr uint32_t CRC24_MASK = 0xFFFFFF;
 constexpr uint8_t L1S_PREAMBLES[] = {0x53, 0x9A, 0xC6};
@@ -44,6 +44,8 @@ std::atomic<bool> parserResetPending{false};
 std::atomic<bool> hasCapturedSatellite{false};
 std::atomic<uint32_t> lastCaptureMs{0};
 std::atomic<uint8_t> lastCaptureSvId{0};
+std::atomic<bool> hasSatelliteReport{false};
+std::atomic<uint32_t> lastSatelliteReportMs{0};
 
 struct SettingsRecord {
     uint32_t magic;
@@ -112,6 +114,13 @@ bool saveSettings()
 #endif
 }
 
+bool isEmptyChannelSettings(const meshtastic_ChannelSettings &settings)
+{
+    return settings.channel_num == 0 && settings.psk.size == 0 && settings.name[0] == '\0' && settings.id == 0 &&
+           !settings.uplink_enabled && !settings.downlink_enabled && !settings.has_module_settings &&
+           settings.module_settings.position_precision == 0 && !settings.module_settings.is_muted && !settings.use_aead;
+}
+
 enum class ParserState : uint8_t { Sync1, Sync2, Class, Id, LengthLow, LengthHigh, Payload, ChecksumA, ChecksumB };
 
 struct UbxParser {
@@ -169,7 +178,8 @@ uint32_t crc24q(const uint8_t *frame)
 }
 
 constexpr NodeNum MICHIBIKI_NODE_NUM_BASE = 0x515A5300; // QZS prefix, with the UBX svId in the low byte.
-constexpr uint8_t MAX_MICHIBIKI_SV_ID = 10;
+constexpr uint8_t MAX_MICHIBIKI_SV_ID = MAX_QZSS_SATELLITES;
+std::atomic<uint16_t> qzssSatelliteData[MAX_MICHIBIKI_SV_ID] = {};
 
 // These local-only identities attribute DCR chat without making satellites radio peers.
 bool isMichibikiSatelliteNode(const meshtastic_NodeInfoLite *node, uint8_t svId)
@@ -300,6 +310,32 @@ void processUbxMessage()
 {
     if (parser.messageClass == 0x02 && parser.messageId == 0x13 && parser.length == 40)
         publishFrame(parser.payload);
+    else if (parser.messageClass == 0x01 && parser.messageId == 0x35 && parser.length >= 8) {
+        const uint8_t numSvs = parser.payload[5];
+        if (parser.length != 8 + static_cast<uint16_t>(numSvs) * 12)
+            return;
+
+        uint16_t satellites[MAX_MICHIBIKI_SV_ID] = {};
+        for (uint8_t i = 0; i < numSvs; ++i) {
+            const uint8_t *entry = parser.payload + 8 + static_cast<uint16_t>(i) * 12;
+            if (entry[0] != 5 || entry[1] == 0 || entry[1] > MAX_MICHIBIKI_SV_ID || entry[2] == 0)
+                continue;
+
+            const uint32_t flags = static_cast<uint32_t>(entry[8]) | (static_cast<uint32_t>(entry[9]) << 8) |
+                                   (static_cast<uint32_t>(entry[10]) << 16) | (static_cast<uint32_t>(entry[11]) << 24);
+            const uint8_t quality = flags & 0x07;
+            if (quality < 2)
+                continue;
+
+            const uint8_t svId = entry[1];
+            satellites[svId - 1] = static_cast<uint16_t>(svId) | (static_cast<uint16_t>(entry[2]) << 8);
+        }
+
+        for (uint8_t i = 0; i < MAX_MICHIBIKI_SV_ID; ++i)
+            qzssSatelliteData[i].store(satellites[i]);
+        lastSatelliteReportMs.store(Time::getMillis());
+        hasSatelliteReport.store(true);
+    }
 }
 } // namespace
 
@@ -324,7 +360,8 @@ bool setupChannel()
 
     for (ChannelIndex i = 0; i < channelFile.channels_count; ++i) {
         meshtastic_Channel &channel = channels.getByIndex(i);
-        if (channel.role != meshtastic_Channel_Role_DISABLED || channel.has_settings)
+        if (channel.role != meshtastic_Channel_Role_DISABLED ||
+            (channel.has_settings && !isEmptyChannelSettings(channel.settings)))
             continue;
 
         channel = meshtastic_Channel_init_zero;
@@ -354,21 +391,43 @@ bool isUbloxM10Detected()
     return m10Detected.load();
 }
 
-bool getCapturedSatellite(uint8_t &svId)
+bool getCapturedSatellite(uint8_t &svId, uint8_t *ageSeconds)
 {
     const uint32_t lastFrameMs = lastCaptureMs.load();
     if (!hasCapturedSatellite.load() || Throttle::hasElapsed(lastFrameMs, CAPTURE_TIMEOUT_MS))
         return false;
 
     svId = lastCaptureSvId.load();
+    if (ageSeconds)
+        *ageSeconds = static_cast<uint8_t>((Time::getMillis() - lastFrameMs) / 1000);
+    return true;
+}
+
+bool getSatelliteStatus(SatelliteStatus *satellites, uint8_t &count)
+{
+    count = 0;
+    if (!satellites || !hasSatelliteReport.load() ||
+        Throttle::hasElapsed(lastSatelliteReportMs.load(), 5000))
+        return false;
+
+    for (uint8_t i = 0; i < MAX_MICHIBIKI_SV_ID; ++i) {
+        const uint32_t packed = qzssSatelliteData[i].load();
+        if (!packed)
+            continue;
+        satellites[count++] = {static_cast<uint8_t>(packed), static_cast<uint8_t>(packed >> 8)};
+    }
     return true;
 }
 
 void setUbloxM10Detected(bool detected)
 {
     m10Detected.store(detected);
-    if (!detected)
+    if (!detected) {
         hasCapturedSatellite.store(false);
+        hasSatelliteReport.store(false);
+        for (auto &satellite : qzssSatelliteData)
+            satellite.store(0);
+    }
 }
 
 bool setEnabled(bool value)
@@ -385,6 +444,9 @@ bool setEnabled(bool value)
         return false;
     }
     hasCapturedSatellite.store(false);
+    hasSatelliteReport.store(false);
+    for (auto &satellite : qzssSatelliteData)
+        satellite.store(0);
     parserResetPending.store(true);
     return true;
 }
@@ -393,6 +455,9 @@ void reset()
 {
     parser.reset();
     hasCapturedSatellite.store(false);
+    hasSatelliteReport.store(false);
+    for (auto &satellite : qzssSatelliteData)
+        satellite.store(0);
 }
 
 bool consumeByte(uint8_t byte)

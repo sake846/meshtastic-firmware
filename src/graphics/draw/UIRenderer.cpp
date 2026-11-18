@@ -33,6 +33,7 @@
 
 // External variables
 extern std::unique_ptr<graphics::Screen> screen;
+extern const char *firmware_version;
 #if defined(OLED_TINY)
 static uint32_t lastSwitchTime = 0;
 #endif
@@ -1746,7 +1747,7 @@ void UIRenderer::drawIconScreen(const char *upperMsg, OLEDDisplay *display, OLED
     }
 
     // Draw version and short name in upper right
-    const char *version = xstr(APP_VERSION_SHORT);
+    const char *version = firmware_version;
     int versionX = x + SCREEN_WIDTH - display->getStringWidth(version) - 5;
     display->drawString(versionX, y + 5, version);
     if (gBootSplashBoldPass) {
@@ -2066,7 +2067,7 @@ void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, O
         display->drawString(x + 0, y + 0, upperMsg);
 
     // Draw version and shortname in upper right
-    const char *version = xstr(APP_VERSION_SHORT);
+    const char *version = firmware_version;
     int versionX = x + SCREEN_WIDTH - display->getStringWidth(version);
     display->drawString(versionX, y + 0, version);
     if (owner.short_name[0]) {

@@ -284,7 +284,7 @@ Router *router = NULL; // Users of router don't care what sort of subclass imple
 static char pager_firmware_version[64];
 #endif
 #if defined(HAS_QZSS_DCR)
-const char *firmware_version = xstr(APP_VERSION_SHORT) " L1S";
+const char *firmware_version = xstr(APP_VERSION_SHORT) " + L1S";
 #else
 const char *firmware_version = optstr(APP_VERSION_SHORT);
 #endif
@@ -377,7 +377,7 @@ void printInfo()
 void setup()
 {
 #if defined(T_LORA_PAGER) && defined(HAS_TFT)
-    snprintf(pager_firmware_version, sizeof(pager_firmware_version), "%s.d5f1619 + MUI", optstr(APP_VERSION_SHORT));
+    snprintf(pager_firmware_version, sizeof(pager_firmware_version), "%s.d5f1619 + MUI L1S", optstr(APP_VERSION_SHORT));
     firmware_version = pager_firmware_version;
 #endif
 

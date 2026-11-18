@@ -580,6 +580,9 @@ NodeDB::NodeDB()
     }
 
     resetRadioConfig(); // If bogus settings got saved, then fix them
+    // Clamp after channel loading; the LoRa validator reads the primary channel name.
+    if (config.has_lora && config.lora.use_preset)
+        RadioInterface::clampConfigLora(config.lora);
     // nodeDB->LOG_DEBUG("region=%d, NODENUM=0x%x, dbsize=%d", config.lora.region, myNodeInfo.my_node_num, numMeshNodes);
 
     // Uncomment below to always enable UDP broadcasts
@@ -2766,12 +2769,6 @@ void NodeDB::loadFromDisk()
         LOG_INFO("Loaded saved config v%d", config.version);
     }
     configLoadComplete = true;
-
-    // Coerce LoRa config fields derived from presets while bootstrapping.
-    // Some clients/UI components display bandwidth/spread_factor directly from config even in preset mode.
-    if (config.has_lora && config.lora.use_preset) {
-        RadioInterface::clampConfigLora(config.lora);
-    }
 
 #if defined(USERPREFS_LORA_TX_DISABLED) && USERPREFS_LORA_TX_DISABLED
     config.lora.tx_enabled = false;
