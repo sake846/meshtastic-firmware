@@ -280,6 +280,9 @@ std::pair<uint8_t, TwoWire *> nodeTelemetrySensorsMap[_meshtastic_TelemetrySenso
 
 Router *router = NULL; // Users of router don't care what sort of subclass implements that API
 
+#if defined(T_LORA_PAGER) && defined(HAS_TFT)
+static char pager_firmware_version[64];
+#endif
 const char *firmware_version = optstr(APP_VERSION_SHORT);
 
 const char *getDeviceName()
@@ -369,6 +372,10 @@ void printInfo()
 #ifndef PIO_UNIT_TESTING
 void setup()
 {
+#if defined(T_LORA_PAGER) && defined(HAS_TFT)
+    snprintf(pager_firmware_version, sizeof(pager_firmware_version), "%s.d5f1619 + MUI", optstr(APP_VERSION_SHORT));
+    firmware_version = pager_firmware_version;
+#endif
 
     // initialize power HAL layer as early as possible
     powerHAL_init();
