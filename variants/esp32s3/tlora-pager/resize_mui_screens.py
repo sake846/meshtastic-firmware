@@ -73,6 +73,80 @@ if b"pagerMUIScreens" not in data:
         raise RuntimeError("unexpected meshtastic-device-ui screen initialization")
     data = data.replace(screens_anchor, screens_resize, 1)
 
+bluetooth_button_anchor = (
+    b"        lv_obj_remove_flag(objects.bluetooth_button, LV_OBJ_FLAG_HIDDEN);"
+    + newline
+)
+bluetooth_button_event = (
+    b"        lv_obj_add_event_cb(objects.bluetooth_button, ui_event_BluetoothButton, LV_EVENT_LONG_PRESSED, NULL);"
+    + newline
+)
+bluetooth_button_focus = (
+    bluetooth_button_anchor
+    + b"        if (lv_group_t *group = lv_group_get_default()) {"
+    + newline
+    + b"            lv_group_add_obj(group, objects.bluetooth_button);"
+    + newline
+    + b"            lv_group_focus_obj(objects.bluetooth_button);"
+    + newline
+    + b"        }"
+    + newline
+    + b"        const lv_style_selector_t pagerBluetoothSelectors[] = {"
+    + newline
+    + b"            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_DEFAULT,"
+    + newline
+    + b"            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUSED,"
+    + newline
+    + b"            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUS_KEY,"
+    + newline
+    + b"            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_PRESSED};"
+    + newline
+    + b"        for (lv_style_selector_t selector : pagerBluetoothSelectors) {"
+    + newline
+    + b"            lv_obj_set_style_outline_width(objects.bluetooth_button, 0, selector);"
+    + newline
+    + b"            lv_obj_set_style_border_width(objects.bluetooth_button, 0, selector);"
+    + newline
+    + b"        }"
+    + newline
+    + bluetooth_button_event
+)
+if data.count(bluetooth_button_anchor) != 1 or data.count(bluetooth_button_event) != 1:
+    raise RuntimeError(
+        "unexpected meshtastic-device-ui programming mode Bluetooth button"
+    )
+bluetooth_button_start = data.index(bluetooth_button_anchor)
+bluetooth_button_end = data.index(bluetooth_button_event, bluetooth_button_start) + len(
+    bluetooth_button_event
+)
+data = (
+    data[:bluetooth_button_start] + bluetooth_button_focus + data[bluetooth_button_end:]
+)
+
+bluetooth_wake_anchor = (
+    b"            lv_screen_load_anim(objects.boot_screen, LV_SCR_LOAD_ANIM_NONE, 0, 0, false);"
+    + newline
+    + b"            screenLocked = false;"
+    + newline
+)
+bluetooth_wake_patch = (
+    b"            lv_screen_load_anim(objects.boot_screen, LV_SCR_LOAD_ANIM_NONE, 0, 0, false);"
+    + newline
+    + b"            if (THIS->state == MeshtasticView::eProgrammingMode && objects.bluetooth_button)"
+    + newline
+    + b"                lv_group_focus_obj(objects.bluetooth_button);"
+    + newline
+    + b"            screenLocked = false;"
+    + newline
+)
+bluetooth_wake_marker = (
+    b"if (THIS->state == MeshtasticView::eProgrammingMode && objects.bluetooth_button)"
+)
+if bluetooth_wake_marker not in data:
+    if data.count(bluetooth_wake_anchor) != 1:
+        raise RuntimeError("unexpected meshtastic-device-ui screen wake path")
+    data = data.replace(bluetooth_wake_anchor, bluetooth_wake_patch, 1)
+
 icon_anchor = (
     b"    if (h > 320 && v > 320) {"
     + newline
@@ -127,6 +201,16 @@ static void pagerApplyInsetFocus(lv_obj_t *obj)
         const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
         lv_obj_set_style_outline_width(obj, 0, focus);
         lv_obj_set_style_border_width(obj, 0, focus);
+    } else if (obj == objects.bluetooth_button) {
+        const lv_style_selector_t markSelectors[] = {
+            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_DEFAULT,
+            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUSED,
+            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_FOCUS_KEY,
+            (lv_style_selector_t)LV_PART_MAIN | (lv_style_selector_t)LV_STATE_PRESSED};
+        for (lv_style_selector_t selector : markSelectors) {
+            lv_obj_set_style_outline_width(obj, 0, selector);
+            lv_obj_set_style_border_width(obj, 0, selector);
+        }
     } else if (lv_obj_check_type(obj, &lv_buttonmatrix_class)) {
         const lv_style_selector_t focus = (lv_style_selector_t)LV_PART_ITEMS | (lv_style_selector_t)LV_STATE_FOCUS_KEY;
         lv_obj_set_style_outline_width(obj, 0, focus);
