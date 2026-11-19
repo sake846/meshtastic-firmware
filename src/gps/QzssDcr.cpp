@@ -4,16 +4,17 @@
 #include "MessageStore.h"
 #endif
 #include "QzssDcr.h"
-#include "buzz.h"
 #include "FSCommon.h"
 #include "SafeFile.h"
 #include "SPILock.h"
 #include "UptimeClock.h"
+#include "gps/RTC.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshService.h"
 #include "mesh/NodeDB.h"
 #include "mesh/Router.h"
 #include "mesh/Throttle.h"
+#include "modules/ExternalNotificationModule.h"
 #ifdef MESHTASTIC_ENCRYPTED_STORAGE
 #include "security/EncryptedStorage.h"
 #endif
@@ -35,8 +36,12 @@ constexpr uint32_t SETTINGS_MAGIC = 0x515A4C31;
 constexpr uint8_t SETTINGS_VERSION = 1;
 constexpr uint32_t CAPTURE_TIMEOUT_MS = 15000;
 constexpr uint32_t DIAGNOSTIC_LOG_INTERVAL_MS = 30000;
+constexpr uint32_t NODE_HEARD_UPDATE_INTERVAL_MS = 10000;
 constexpr uint8_t MAX_MICHIBIKI_SV_ID = MAX_QZSS_SATELLITES;
 std::atomic<uint8_t> diagnosticQzssCno[MAX_MICHIBIKI_SV_ID] = {};
+std::atomic<uint8_t> lastQzssCno[MAX_MICHIBIKI_SV_ID] = {};
+uint32_t lastNodeHeardUpdateMs[MAX_MICHIBIKI_SV_ID] = {};
+bool hasNodeHeardUpdate[MAX_MICHIBIKI_SV_ID] = {};
 
 uint8_t channelIndex = NO_CHANNEL;
 uint32_t recentFrames[16] = {};
@@ -65,6 +70,7 @@ uint32_t l1sCrcMatches = 0;
 uint32_t l1sOtherMessageTypes = 0;
 uint32_t l1sMt43Messages = 0;
 uint32_t l1sMt44Messages = 0;
+uint32_t l1sMt63Messages = 0;
 uint32_t l1sFramesBySatellite[MAX_MICHIBIKI_SV_ID] = {};
 uint32_t lastValidL1SMs = 0;
 uint32_t lastMt43Or44Ms = 0;
@@ -201,7 +207,6 @@ uint32_t crc24q(const uint8_t *frame)
     return crc;
 }
 
-constexpr NodeNum MICHIBIKI_NODE_NUM_BASE = 0x515A5300; // QZS prefix, with the UBX svId in the low byte.
 std::atomic<uint16_t> qzssSatelliteData[MAX_MICHIBIKI_SV_ID] = {};
 
 // These local-only identities attribute DCR chat without making satellites radio peers.
@@ -238,6 +243,29 @@ bool registerMichibikiSatellite(uint8_t svId)
     nodeDB->updateUser(nodeNum, satellite, channelIndex);
     return isMichibikiSatelliteNode(nodeDB->getMeshNode(nodeNum), svId);
 }
+
+void recordMichibikiSatelliteReception(uint8_t svId)
+{
+    if (svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
+        return;
+
+    const uint8_t index = svId - 1;
+    if (hasNodeHeardUpdate[index] &&
+        !Throttle::hasElapsed(lastNodeHeardUpdateMs[index], NODE_HEARD_UPDATE_INTERVAL_MS))
+        return;
+
+    lastNodeHeardUpdateMs[index] = Time::stampMillis();
+    hasNodeHeardUpdate[index] = true;
+    meshtastic_MeshPacket packet = meshtastic_MeshPacket_init_zero;
+    packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
+    packet.from = MICHIBIKI_NODE_NUM_BASE + svId;
+    packet.rx_time = getValidTime(RTCQualityFromNet);
+    packet.has_rx_time = packet.rx_time != 0;
+    if (!packet.has_rx_time)
+        packet.rx_time = Time::getUptimeSecs();
+    nodeDB->updateFrom(packet);
+}
+
 uint32_t frameHash(const uint8_t *frame)
 {
     uint32_t hash = 2166136261UL;
@@ -545,6 +573,8 @@ void publishFrame(const uint8_t *payload)
     if (svId > 0 && svId <= MAX_MICHIBIKI_SV_ID)
         ++l1sFramesBySatellite[svId - 1];
     const bool satelliteRegistered = registerMichibikiSatellite(svId);
+    if (satelliteRegistered)
+        recordMichibikiSatelliteReception(svId);
 
     lastCaptureSvId.store(svId);
     lastCaptureMs.store(Time::getMillis());
@@ -555,6 +585,9 @@ void publishFrame(const uint8_t *payload)
         ++l1sMt43Messages;
     } else if (messageType == 44) {
         ++l1sMt44Messages;
+    } else if (messageType == 63) {
+        ++l1sMt63Messages;
+        return;
     } else {
         ++l1sOtherMessageTypes;
         return;
@@ -595,14 +628,16 @@ void publishFrame(const uint8_t *payload)
     packet->decoded.payload.size = static_cast<uint16_t>(position);
     std::memcpy(packet->decoded.payload.bytes, message, position);
     packet->decoded.want_response = false;
-    if (satelliteRegistered)
+    if (satelliteRegistered) {
         packet->from = MICHIBIKI_NODE_NUM_BASE + svId;
+    }
 
 #if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
     messageStore.tryAddFromPacket(*packet);
 #endif
     service->sendToPhone(packet);
-    playBeep();
+    if (externalNotificationModule)
+        externalNotificationModule->startNotification();
 }
 
 void processUbxMessage()
@@ -626,8 +661,12 @@ void processUbxMessage()
                 continue;
 
             const uint8_t svId = entry[1];
-            if (entry[2] > 0)
+            if (entry[2] > 0) {
                 diagnosticCno[svId - 1] = entry[2];
+                lastQzssCno[svId - 1].store(entry[2]);
+                if (registerMichibikiSatellite(svId))
+                    recordMichibikiSatelliteReception(svId);
+            }
             if (entry[2] == 0)
                 continue;
 
@@ -731,6 +770,15 @@ bool getSatelliteStatus(SatelliteStatus *satellites, uint8_t &count)
     return true;
 }
 
+bool getLastSatelliteCno(uint8_t svId, uint8_t &cno)
+{
+    if (svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
+        return false;
+
+    cno = lastQzssCno[svId - 1].load();
+    return cno != 0;
+}
+
 void logDiagnostics(const char *powerState)
 {
     const uint32_t now = Time::getMillis();
@@ -738,14 +786,15 @@ void logDiagnostics(const char *powerState)
         return;
 
     LOG_INFO("QZSS L1S/30s: SFRBX=%lu badCK=%lu large=%lu badLen=%lu otherSig=%lu L1S=%lu badWords=%lu "
-             "PAB=%lu/%lu CRC=%lu/%lu MT43=%lu MT44=%lu otherMT=%lu",
+             "PAB=%lu/%lu CRC=%lu/%lu MT43=%lu MT44=%lu MT63=%lu otherMT=%lu",
              static_cast<unsigned long>(sfrbxMessages), static_cast<unsigned long>(sfrbxChecksumErrors),
              static_cast<unsigned long>(sfrbxOversizeMessages), static_cast<unsigned long>(sfrbxLengthErrors),
              static_cast<unsigned long>(nonL1sSfrbxMessages), static_cast<unsigned long>(l1sSfrbxMessages),
              static_cast<unsigned long>(l1sWordCountErrors), static_cast<unsigned long>(l1sPreambleMatches),
              static_cast<unsigned long>(l1sPreambleRejects), static_cast<unsigned long>(l1sCrcMatches),
              static_cast<unsigned long>(l1sCrcRejects), static_cast<unsigned long>(l1sMt43Messages),
-             static_cast<unsigned long>(l1sMt44Messages), static_cast<unsigned long>(l1sOtherMessageTypes));
+             static_cast<unsigned long>(l1sMt44Messages), static_cast<unsigned long>(l1sMt63Messages),
+             static_cast<unsigned long>(l1sOtherMessageTypes));
 
     char satelliteSummary[384] = {};
     size_t position = 0;
@@ -791,6 +840,7 @@ void logDiagnostics(const char *powerState)
     l1sOtherMessageTypes = 0;
     l1sMt43Messages = 0;
     l1sMt44Messages = 0;
+    l1sMt63Messages = 0;
     std::memset(l1sFramesBySatellite, 0, sizeof(l1sFramesBySatellite));
 }
 
