@@ -100,6 +100,9 @@
 #define EXPANDS_GPS_EN (4)
 #define EXPANDS_NFC_EN (5)
 #define EXPANDS_GPS_RST (7)
+#if defined(T_LORA_PAGER)
+void powerCyclePagerGpsReceiver();
+#endif
 #define EXPANDS_KB_EN (8)
 #define EXPANDS_GPIO_EN (9)
 #define EXPANDS_SD_DET (10)

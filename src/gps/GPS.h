@@ -222,6 +222,9 @@ class GPS : private concurrency::OSThread
 
     uint8_t speedSelect = 0;
     uint8_t probeTries = 0;
+#if defined(T_LORA_PAGER)
+    bool pagerGpsPowerCycled = false;
+#endif
     // Cache file is successfully loaded.
     bool hasProbeCache = false;
     // Ensures cached probe is attempted once per boot.
