@@ -1693,6 +1693,7 @@ int32_t GPS::runOnce()
         if (getACK(0x06, 0x8A, 500) != GNSS_RESPONSE_OK)
             LOG_WARN("Failed to update QZSS L1S receiver setting");
         qzssDcrConfigPending.store(false);
+        return 750;
     }
 #endif
 
@@ -1723,6 +1724,12 @@ int32_t GPS::runOnce()
         // if we have received valid NMEA claim we are connected
         setConnected();
     }
+
+#if defined(HAS_QZSS_DCR)
+    if (gnssModel == GNSS_MODEL_UBLOX10 && QzssDcr::isEnabled() &&
+        config.position.gps_mode == meshtastic_Config_PositionConfig_GpsMode_ENABLED)
+        QzssDcr::logDiagnostics(getGPSPowerStateString(powerState));
+#endif
 
     // If we're due for an update, wake the GPS
     if (!config.position.fixed_position && powerState != GPS_ACTIVE && scheduling.isUpdateDue())

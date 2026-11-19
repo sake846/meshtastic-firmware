@@ -4,6 +4,7 @@
 #include "MessageStore.h"
 #endif
 #include "QzssDcr.h"
+#include "buzz.h"
 #include "FSCommon.h"
 #include "SafeFile.h"
 #include "SPILock.h"
@@ -33,6 +34,9 @@ constexpr uint8_t L1S_PREAMBLES[] = {0x53, 0x9A, 0xC6};
 constexpr uint32_t SETTINGS_MAGIC = 0x515A4C31;
 constexpr uint8_t SETTINGS_VERSION = 1;
 constexpr uint32_t CAPTURE_TIMEOUT_MS = 15000;
+constexpr uint32_t DIAGNOSTIC_LOG_INTERVAL_MS = 30000;
+constexpr uint8_t MAX_MICHIBIKI_SV_ID = MAX_QZSS_SATELLITES;
+std::atomic<uint8_t> diagnosticQzssCno[MAX_MICHIBIKI_SV_ID] = {};
 
 uint8_t channelIndex = NO_CHANNEL;
 uint32_t recentFrames[16] = {};
@@ -46,6 +50,26 @@ std::atomic<uint32_t> lastCaptureMs{0};
 std::atomic<uint8_t> lastCaptureSvId{0};
 std::atomic<bool> hasSatelliteReport{false};
 std::atomic<uint32_t> lastSatelliteReportMs{0};
+uint32_t lastDiagnosticLogMs = 0;
+uint32_t sfrbxMessages = 0;
+uint32_t sfrbxChecksumErrors = 0;
+uint32_t sfrbxOversizeMessages = 0;
+uint32_t sfrbxLengthErrors = 0;
+uint32_t nonL1sSfrbxMessages = 0;
+uint32_t l1sSfrbxMessages = 0;
+uint32_t l1sWordCountErrors = 0;
+uint32_t l1sPreambleRejects = 0;
+uint32_t l1sPreambleMatches = 0;
+uint32_t l1sCrcRejects = 0;
+uint32_t l1sCrcMatches = 0;
+uint32_t l1sOtherMessageTypes = 0;
+uint32_t l1sMt43Messages = 0;
+uint32_t l1sMt44Messages = 0;
+uint32_t l1sFramesBySatellite[MAX_MICHIBIKI_SV_ID] = {};
+uint32_t lastValidL1SMs = 0;
+uint32_t lastMt43Or44Ms = 0;
+bool hasValidL1S = false;
+bool hasMt43Or44 = false;
 
 struct SettingsRecord {
     uint32_t magic;
@@ -178,7 +202,6 @@ uint32_t crc24q(const uint8_t *frame)
 }
 
 constexpr NodeNum MICHIBIKI_NODE_NUM_BASE = 0x515A5300; // QZS prefix, with the UBX svId in the low byte.
-constexpr uint8_t MAX_MICHIBIKI_SV_ID = MAX_QZSS_SATELLITES;
 std::atomic<uint16_t> qzssSatelliteData[MAX_MICHIBIKI_SV_ID] = {};
 
 // These local-only identities attribute DCR chat without making satellites radio peers.
@@ -234,12 +257,267 @@ bool seenRecently(uint32_t hash)
     return false;
 }
 
+bool appendDcxText(char *message, size_t capacity, size_t &position, const char *text)
+{
+    const size_t length = std::strlen(text);
+    if (position >= capacity || length >= capacity - position)
+        return false;
+    std::memcpy(message + position, text, length);
+    position += length;
+    message[position] = '\0';
+    return true;
+}
+
+bool appendDcxNumber(char *message, size_t capacity, size_t &position, unsigned value)
+{
+    if (position >= capacity)
+        return false;
+    const int length = std::snprintf(message + position, capacity - position, "%u", value);
+    if (length < 0 || static_cast<size_t>(length) >= capacity - position)
+        return false;
+    position += static_cast<size_t>(length);
+    return true;
+}
+
+const char *dcxHazardText(uint32_t code)
+{
+    switch (code) {
+    case 8:
+        return "ミサイル攻撃";
+    case 27:
+        return "森林火災";
+    case 36:
+        return "地震";
+    case 44:
+        return "津波";
+    case 68:
+        return "洪水";
+    case 74:
+        return "大雨";
+    case 82:
+        return "台風";
+    case 95:
+        return "安全上の警報";
+    case 113:
+        return "試験情報";
+    default:
+        return nullptr;
+    }
+}
+
+const char *dcxSeverityText(uint32_t severity)
+{
+    switch (severity) {
+    case 0:
+        return "不明";
+    case 1:
+        return "中程度";
+    case 2:
+        return "重大";
+    case 3:
+        return "極めて重大";
+    default:
+        return "未定義";
+    }
+}
+
+bool formatDcxInstruction(uint32_t code, char *text, size_t capacity)
+{
+    switch (code) {
+    case 0:
+        text[0] = '\0';
+        return true;
+    case 1:
+    case 127:
+    case 255:
+        std::snprintf(text, capacity, "直ちに命を守る行動をとってください。");
+        return true;
+    case 126:
+        std::snprintf(text, capacity, "これはDCXの試験です。");
+        return true;
+    case 128:
+        std::snprintf(text, capacity, "ミサイル発射。建物内または地下へ避難。");
+        return true;
+    case 129:
+        std::snprintf(text, capacity, "ミサイル通過。避難解除。不審物に近づかず警察・消防へ通報。");
+        return true;
+    case 130:
+        std::snprintf(text, capacity, "ミサイルは海に落下。避難解除。不審物に注意。");
+        return true;
+    case 131:
+        std::snprintf(text, capacity, "ミサイルは日本に飛来しない見込み。避難解除。");
+        return true;
+    case 132:
+        std::snprintf(text, capacity, "直ちに建物内または地下へ避難。");
+        return true;
+    case 133:
+        std::snprintf(text, capacity, "ミサイル迎撃。破片落下のおそれ。屋内へ避難。");
+        return true;
+    case 134:
+        std::snprintf(text, capacity, "ミサイルが周辺に落下。続報に注意し屋内へ避難。");
+        return true;
+    case 135:
+        std::snprintf(text, capacity, "ミサイルは日本に落下しない見込み。避難解除。");
+        return true;
+    case 136:
+        std::snprintf(text, capacity, "これはJアラートのテストです。");
+        return true;
+    default:
+        break;
+    }
+
+    const uint32_t action = code >> 8;
+    const uint32_t location = code & 0xFF;
+    static const char *const actions[] = {"", "留まってください", "移動してください", "近づかないでください"};
+    static const char *const locations[] = {"", "頑丈な建物の中または下", "3階以上", "地下", "山", "水辺", "化学物質を扱う建物",
+                                            "崖など崩れやすい場所"};
+    if (action >= 1 && action <= 3 && location <= 7) {
+        if (location == 0)
+            std::snprintf(text, capacity, "%s。", actions[action]);
+        else if (action == 1)
+            std::snprintf(text, capacity, "%sで%s。", locations[location], actions[action]);
+        else if (action == 2)
+            std::snprintf(text, capacity, "%sへ%s。", locations[location], actions[action]);
+        else
+            std::snprintf(text, capacity, "%sに%s。", locations[location], actions[action]);
+        return true;
+    }
+    std::snprintf(text, capacity, "行動指示は未対応です（コード%u）。", static_cast<unsigned>(code));
+    return true;
+}
+
+bool appendDcxTarget(const uint8_t *frame, uint32_t country, uint32_t provider, char *message, size_t capacity, size_t &position)
+{
+    if (!appendDcxText(message, capacity, position, "対象:"))
+        return false;
+
+    if (country == 111 && (provider == 2 || provider == 3)) {
+        static const char *const prefectures[] = {"北海道", "青森", "岩手", "宮城", "秋田", "山形", "福島", "茨城", "栃木", "群馬",
+                                                  "埼玉",   "千葉", "東京", "神奈川", "新潟", "富山", "石川", "福井", "山梨", "長野",
+                                                  "岐阜",   "静岡", "愛知", "三重",   "滋賀", "京都", "大阪", "兵庫", "奈良", "和歌山",
+                                                  "鳥取",   "島根", "岡山", "広島",   "山口", "徳島", "香川", "愛媛", "高知", "福岡",
+                                                  "佐賀",   "長崎", "熊本", "大分",   "宮崎", "鹿児島", "沖縄"};
+        const uint32_t codeListType = getBits(frame, 146, 1);
+        if (codeListType == 0) {
+            uint8_t count = 0;
+            for (uint8_t i = 0; i < 47; ++i)
+                count += getBits(frame, 147 + (46 - i), 1) != 0;
+            if (count == 47)
+                return appendDcxText(message, capacity, position, "全国\n");
+            if (count == 0)
+                return appendDcxText(message, capacity, position, "指定なし\n");
+
+            uint8_t written = 0;
+            for (uint8_t i = 0; i < 47 && written < 3; ++i) {
+                if (getBits(frame, 147 + (46 - i), 1) == 0)
+                    continue;
+                if (written && !appendDcxText(message, capacity, position, "・"))
+                    return false;
+                if (!appendDcxText(message, capacity, position, prefectures[i]))
+                    return false;
+                ++written;
+            }
+            if (count > written) {
+                if (!appendDcxText(message, capacity, position, "ほか"))
+                    return false;
+                if (!appendDcxNumber(message, capacity, position, count - written) ||
+                    !appendDcxText(message, capacity, position, "都道府県"))
+                    return false;
+            }
+            return appendDcxText(message, capacity, position, "\n");
+        }
+
+        uint8_t written = 0;
+        if (!appendDcxText(message, capacity, position, "市区町村 "))
+            return false;
+        for (uint8_t i = 0; i < 4; ++i) {
+            const uint32_t code = getBits(frame, 147 + i * 16, 16);
+            if (code == 0)
+                continue;
+            if (written && !appendDcxText(message, capacity, position, "・"))
+                return false;
+            char codeText[8];
+            std::snprintf(codeText, sizeof(codeText), "%05u", static_cast<unsigned>(code));
+            if (!appendDcxText(message, capacity, position, codeText))
+                return false;
+            ++written;
+        }
+        return appendDcxText(message, capacity, position, written ? "\n" : "指定なし\n");
+    }
+
+    if (country != 111 || (provider != 1 && provider != 4))
+        return appendDcxText(message, capacity, position, "地域形式は未対応\n");
+
+    const uint32_t targetCode = getBits(frame, 146, 16);
+    if (targetCode != 0) {
+        if (!appendDcxText(message, capacity, position, "市区町村コード"))
+            return false;
+        char codeText[8];
+        std::snprintf(codeText, sizeof(codeText), "%05u", static_cast<unsigned>(targetCode));
+        if (!appendDcxText(message, capacity, position, codeText))
+            return false;
+    } else {
+        const uint32_t ellipse = getBits(frame, 80, 16) | getBits(frame, 96, 17) | getBits(frame, 113, 5) | getBits(frame, 118, 5) |
+                                 getBits(frame, 123, 6);
+        if (!appendDcxText(message, capacity, position, ellipse ? "楕円範囲" : "指定なし"))
+            return false;
+    }
+    return appendDcxText(message, capacity, position, "\n");
+}
+
+bool formatDcxMessage(const uint8_t *frame, char *message, size_t capacity, size_t &position)
+{
+    const uint32_t messageType = getBits(frame, 24, 2);
+    const uint32_t country = getBits(frame, 26, 9);
+    const uint32_t provider = getBits(frame, 35, 5);
+    const uint32_t hazard = getBits(frame, 40, 7);
+    const uint32_t severity = getBits(frame, 47, 2);
+    const uint32_t library = getBits(frame, 66, 1);
+    const uint32_t instruction = getBits(frame, 70, 10);
+    static const char *const messageTypes[] = {"試験", "警報", "更新", "解除"};
+
+    message[0] = '\0';
+    position = 0;
+    if (!appendDcxText(message, capacity, position, "みちびきDCX【") ||
+        !appendDcxText(message, capacity, position, messageTypes[messageType]) ||
+        !appendDcxText(message, capacity, position, "】\n種別:"))
+        return false;
+    const char *hazardText = dcxHazardText(hazard);
+    if (hazardText) {
+        if (!appendDcxText(message, capacity, position, hazardText))
+            return false;
+    } else if (!appendDcxText(message, capacity, position, "コード") ||
+               !appendDcxNumber(message, capacity, position, static_cast<unsigned>(hazard))) {
+        return false;
+    }
+    if (messageType != 0 && (!appendDcxText(message, capacity, position, "・") ||
+                             !appendDcxText(message, capacity, position, dcxSeverityText(severity))))
+        return false;
+    if (!appendDcxText(message, capacity, position, "\n") ||
+        !appendDcxTarget(frame, country, provider, message, capacity, position))
+        return false;
+
+    char instructionText[144];
+    if (country != 111 || library != 1) {
+        std::snprintf(instructionText, sizeof(instructionText), "行動指示は未対応です。");
+    } else if (!formatDcxInstruction(instruction, instructionText, sizeof(instructionText))) {
+        return false;
+    }
+    return instructionText[0] == '\0' || (appendDcxText(message, capacity, position, instructionText));
+}
+
 void publishFrame(const uint8_t *payload)
 {
-    if (payload[0] != 5 || payload[2] != 1 || (payload[4] != 8 && payload[4] != 9))
+    if (payload[0] != 5 || payload[2] != 1) {
+        ++nonL1sSfrbxMessages;
         return;
+    }
+    ++l1sSfrbxMessages;
+    if (payload[4] != 8 && payload[4] != 9) {
+        ++l1sWordCountErrors;
+        return;
+    }
     const uint8_t svId = payload[1];
-    const bool satelliteRegistered = registerMichibikiSatellite(svId);
 
     uint8_t frame[32];
     for (uint8_t word = 0; word < 8; ++word) {
@@ -251,42 +529,62 @@ void publishFrame(const uint8_t *payload)
     }
 
     const uint8_t preamble = frame[0];
-    if (preamble != L1S_PREAMBLES[0] && preamble != L1S_PREAMBLES[1] && preamble != L1S_PREAMBLES[2])
+    if (preamble != L1S_PREAMBLES[0] && preamble != L1S_PREAMBLES[1] && preamble != L1S_PREAMBLES[2]) {
+        ++l1sPreambleRejects;
         return;
-    if (crc24q(frame) != getBits(frame, 226, 24))
+    }
+    ++l1sPreambleMatches;
+    if (crc24q(frame) != getBits(frame, 226, 24)) {
+        ++l1sCrcRejects;
         return;
+    }
+    ++l1sCrcMatches;
+    const uint32_t now = Time::getMillis();
+    lastValidL1SMs = now;
+    hasValidL1S = true;
+    if (svId > 0 && svId <= MAX_MICHIBIKI_SV_ID)
+        ++l1sFramesBySatellite[svId - 1];
+    const bool satelliteRegistered = registerMichibikiSatellite(svId);
 
     lastCaptureSvId.store(svId);
     lastCaptureMs.store(Time::getMillis());
     hasCapturedSatellite.store(true);
 
     const uint8_t messageType = static_cast<uint8_t>(getBits(frame, 8, 6));
-    if (messageType != 43 && messageType != 44)
+    if (messageType == 43) {
+        ++l1sMt43Messages;
+    } else if (messageType == 44) {
+        ++l1sMt44Messages;
+    } else {
+        ++l1sOtherMessageTypes;
         return;
+    }
+    lastMt43Or44Ms = now;
+    hasMt43Or44 = true;
 
     frame[31] &= 0xC0;
     if (seenRecently(frameHash(frame)) || channelIndex == NO_CHANNEL || !router || !service)
         return;
 
-    char message[160];
-    int length;
+    char message[meshtastic_Constants_DATA_PAYLOAD_LEN];
+    size_t position = 0;
     if (messageType == 43) {
         const uint8_t reportClass = static_cast<uint8_t>(getBits(frame, 14, 3));
         const uint8_t disasterCategory = static_cast<uint8_t>(getBits(frame, 17, 4));
-        length = std::snprintf(message, sizeof(message), "みちびき 災危通報 Rc=%u Dc=%u\n", static_cast<unsigned>(reportClass),
-                               static_cast<unsigned>(disasterCategory));
-    } else {
-        length = std::snprintf(message, sizeof(message), "みちびき DCX\n");
-    }
-    if (length < 0 || static_cast<size_t>(length) >= sizeof(message))
-        return;
-
-    size_t position = static_cast<size_t>(length);
-    for (uint8_t i = 0; i < 32; ++i) {
-        const int written = std::snprintf(message + position, sizeof(message) - position, "%02X", frame[i]);
-        if (written != 2)
+        const int length = std::snprintf(message, sizeof(message), "みちびき 災危通報 Rc=%u Dc=%u\n", static_cast<unsigned>(reportClass),
+                                         static_cast<unsigned>(disasterCategory));
+        if (length < 0 || static_cast<size_t>(length) >= sizeof(message))
             return;
-        position += 2;
+        position = static_cast<size_t>(length);
+        for (uint8_t i = 0; i < sizeof(frame); ++i) {
+            const int written = std::snprintf(message + position, sizeof(message) - position, "%02X", frame[i]);
+            if (written != 2)
+                return;
+            position += static_cast<size_t>(written);
+        }
+    } else {
+        if (!formatDcxMessage(frame, message, sizeof(message), position))
+            return;
     }
 
     meshtastic_MeshPacket *packet = router->allocForSending();
@@ -304,22 +602,33 @@ void publishFrame(const uint8_t *payload)
     messageStore.tryAddFromPacket(*packet);
 #endif
     service->sendToPhone(packet);
+    playBeep();
 }
 
 void processUbxMessage()
 {
-    if (parser.messageClass == 0x02 && parser.messageId == 0x13 && parser.length >= 8 &&
-        parser.length == 8 + static_cast<uint16_t>(parser.payload[4]) * 4)
-        publishFrame(parser.payload);
-    else if (parser.messageClass == 0x01 && parser.messageId == 0x35 && parser.length >= 8) {
+    if (parser.messageClass == 0x02 && parser.messageId == 0x13) {
+        ++sfrbxMessages;
+        if (parser.length >= 8 && parser.length == 8 + static_cast<uint16_t>(parser.payload[4]) * 4)
+            publishFrame(parser.payload);
+        else
+            ++sfrbxLengthErrors;
+    } else if (parser.messageClass == 0x01 && parser.messageId == 0x35 && parser.length >= 8) {
         const uint8_t numSvs = parser.payload[5];
         if (parser.length != 8 + static_cast<uint16_t>(numSvs) * 12)
             return;
 
         uint16_t satellites[MAX_MICHIBIKI_SV_ID] = {};
+        uint8_t diagnosticCno[MAX_MICHIBIKI_SV_ID] = {};
         for (uint8_t i = 0; i < numSvs; ++i) {
             const uint8_t *entry = parser.payload + 8 + static_cast<uint16_t>(i) * 12;
-            if (entry[0] != 5 || entry[1] == 0 || entry[1] > MAX_MICHIBIKI_SV_ID || entry[2] == 0)
+            if (entry[0] != 5 || entry[1] == 0 || entry[1] > MAX_MICHIBIKI_SV_ID)
+                continue;
+
+            const uint8_t svId = entry[1];
+            if (entry[2] > 0)
+                diagnosticCno[svId - 1] = entry[2];
+            if (entry[2] == 0)
                 continue;
 
             const uint32_t flags = static_cast<uint32_t>(entry[8]) | (static_cast<uint32_t>(entry[9]) << 8) |
@@ -328,15 +637,17 @@ void processUbxMessage()
             if (quality < 2)
                 continue;
 
-            const uint8_t svId = entry[1];
             satellites[svId - 1] = static_cast<uint16_t>(svId) | (static_cast<uint16_t>(entry[2]) << 8);
         }
 
-        for (uint8_t i = 0; i < MAX_MICHIBIKI_SV_ID; ++i)
+        for (uint8_t i = 0; i < MAX_MICHIBIKI_SV_ID; ++i) {
             qzssSatelliteData[i].store(satellites[i]);
+            diagnosticQzssCno[i].store(diagnosticCno[i]);
+        }
         lastSatelliteReportMs.store(Time::getMillis());
         hasSatelliteReport.store(true);
     }
+
 }
 } // namespace
 
@@ -420,6 +731,69 @@ bool getSatelliteStatus(SatelliteStatus *satellites, uint8_t &count)
     return true;
 }
 
+void logDiagnostics(const char *powerState)
+{
+    const uint32_t now = Time::getMillis();
+    if (!Throttle::hasElapsed(lastDiagnosticLogMs, DIAGNOSTIC_LOG_INTERVAL_MS))
+        return;
+
+    LOG_INFO("QZSS L1S/30s: SFRBX=%lu badCK=%lu large=%lu badLen=%lu otherSig=%lu L1S=%lu badWords=%lu "
+             "PAB=%lu/%lu CRC=%lu/%lu MT43=%lu MT44=%lu otherMT=%lu",
+             static_cast<unsigned long>(sfrbxMessages), static_cast<unsigned long>(sfrbxChecksumErrors),
+             static_cast<unsigned long>(sfrbxOversizeMessages), static_cast<unsigned long>(sfrbxLengthErrors),
+             static_cast<unsigned long>(nonL1sSfrbxMessages), static_cast<unsigned long>(l1sSfrbxMessages),
+             static_cast<unsigned long>(l1sWordCountErrors), static_cast<unsigned long>(l1sPreambleMatches),
+             static_cast<unsigned long>(l1sPreambleRejects), static_cast<unsigned long>(l1sCrcMatches),
+             static_cast<unsigned long>(l1sCrcRejects), static_cast<unsigned long>(l1sMt43Messages),
+             static_cast<unsigned long>(l1sMt44Messages), static_cast<unsigned long>(l1sOtherMessageTypes));
+
+    char satelliteSummary[384] = {};
+    size_t position = 0;
+    if (hasSatelliteReport.load() && !Throttle::hasElapsed(lastSatelliteReportMs.load(), 5000)) {
+        for (uint8_t i = 0; i < MAX_MICHIBIKI_SV_ID; ++i) {
+            const uint8_t cno = diagnosticQzssCno[i].load();
+            if (!cno)
+                continue;
+            const uint8_t svId = i + 1;
+            const int length = std::snprintf(satelliteSummary + position, sizeof(satelliteSummary) - position,
+                                             "%sSV%u C/N0=%u frames=%lu", position ? ", " : "",
+                                             static_cast<unsigned>(192 + svId),
+                                             static_cast<unsigned>(cno),
+                                             static_cast<unsigned long>(l1sFramesBySatellite[svId - 1]));
+            if (length < 0 || static_cast<size_t>(length) >= sizeof(satelliteSummary) - position)
+                break;
+            position += static_cast<size_t>(length);
+        }
+    }
+    if (!position)
+        std::strncpy(satelliteSummary, "NONE", sizeof(satelliteSummary) - 1);
+
+    char lastL1SAge[16] = "never";
+    char lastMtAge[16] = "never";
+    if (hasValidL1S)
+        std::snprintf(lastL1SAge, sizeof(lastL1SAge), "%lus", static_cast<unsigned long>((now - lastValidL1SMs) / 1000));
+    if (hasMt43Or44)
+        std::snprintf(lastMtAge, sizeof(lastMtAge), "%lus", static_cast<unsigned long>((now - lastMt43Or44Ms) / 1000));
+    LOG_INFO("QZSS sats: %s; lastL1S=%s lastMT43/44=%s pwr=%s", satelliteSummary, lastL1SAge, lastMtAge, powerState);
+
+    lastDiagnosticLogMs = now;
+    sfrbxMessages = 0;
+    sfrbxChecksumErrors = 0;
+    sfrbxOversizeMessages = 0;
+    sfrbxLengthErrors = 0;
+    nonL1sSfrbxMessages = 0;
+    l1sSfrbxMessages = 0;
+    l1sWordCountErrors = 0;
+    l1sPreambleRejects = 0;
+    l1sPreambleMatches = 0;
+    l1sCrcRejects = 0;
+    l1sCrcMatches = 0;
+    l1sOtherMessageTypes = 0;
+    l1sMt43Messages = 0;
+    l1sMt44Messages = 0;
+    std::memset(l1sFramesBySatellite, 0, sizeof(l1sFramesBySatellite));
+}
+
 void setUbloxM10Detected(bool detected)
 {
     m10Detected.store(detected);
@@ -428,6 +802,8 @@ void setUbloxM10Detected(bool detected)
         hasSatelliteReport.store(false);
         for (auto &satellite : qzssSatelliteData)
             satellite.store(0);
+        for (auto &cno : diagnosticQzssCno)
+            cno.store(0);
     }
 }
 
@@ -448,6 +824,8 @@ bool setEnabled(bool value)
     hasSatelliteReport.store(false);
     for (auto &satellite : qzssSatelliteData)
         satellite.store(0);
+    for (auto &cno : diagnosticQzssCno)
+        cno.store(0);
     parserResetPending.store(true);
     return true;
 }
@@ -459,6 +837,8 @@ void reset()
     hasSatelliteReport.store(false);
     for (auto &satellite : qzssSatelliteData)
         satellite.store(0);
+    for (auto &cno : diagnosticQzssCno)
+        cno.store(0);
 }
 
 bool consumeByte(uint8_t byte)
@@ -517,7 +897,12 @@ bool consumeByte(uint8_t byte)
         parser.state = ParserState::ChecksumB;
         return true;
     case ParserState::ChecksumB:
-        if (!parser.payloadTooLarge && parser.receivedChecksumA == parser.checksumA && byte == parser.checksumB)
+        if (parser.payloadTooLarge && parser.messageClass == 0x02 && parser.messageId == 0x13)
+            ++sfrbxOversizeMessages;
+        else if (parser.receivedChecksumA != parser.checksumA || byte != parser.checksumB) {
+            if (parser.messageClass == 0x02 && parser.messageId == 0x13)
+                ++sfrbxChecksumErrors;
+        } else
             processUbxMessage();
         parser.reset();
         return true;

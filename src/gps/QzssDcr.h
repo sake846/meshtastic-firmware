@@ -17,6 +17,7 @@ bool isEnabled();
 bool isUbloxM10Detected();
 bool getCapturedSatellite(uint8_t &svId, uint8_t *ageSeconds = nullptr);
 bool getSatelliteStatus(SatelliteStatus *satellites, uint8_t &count);
+void logDiagnostics(const char *powerState);
 void setUbloxM10Detected(bool detected);
 bool setEnabled(bool enabled);
 void setReceptionEnabled(bool enabled);
