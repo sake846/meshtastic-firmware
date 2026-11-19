@@ -236,7 +236,7 @@ bool seenRecently(uint32_t hash)
 
 void publishFrame(const uint8_t *payload)
 {
-    if (payload[0] != 5 || payload[2] != 1 || payload[4] != 8)
+    if (payload[0] != 5 || payload[2] != 1 || (payload[4] != 8 && payload[4] != 9))
         return;
     const uint8_t svId = payload[1];
     const bool satelliteRegistered = registerMichibikiSatellite(svId);
@@ -308,7 +308,8 @@ void publishFrame(const uint8_t *payload)
 
 void processUbxMessage()
 {
-    if (parser.messageClass == 0x02 && parser.messageId == 0x13 && parser.length == 40)
+    if (parser.messageClass == 0x02 && parser.messageId == 0x13 && parser.length >= 8 &&
+        parser.length == 8 + static_cast<uint16_t>(parser.payload[4]) * 4)
         publishFrame(parser.payload);
     else if (parser.messageClass == 0x01 && parser.messageId == 0x35 && parser.length >= 8) {
         const uint8_t numSvs = parser.payload[5];
