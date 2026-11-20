@@ -36,6 +36,7 @@ class AudioThread : public concurrency::OSThread
     {
         ampEnable(true);
         setCPUFast(true);
+        audioOut->SetGain(rtttlGain(data, len));
         rtttlFile = std::unique_ptr<AudioFileSourcePROGMEM>(new AudioFileSourcePROGMEM(data, len));
         i2sRtttl = std::unique_ptr<AudioGeneratorRTTTL>(new AudioGeneratorRTTTL());
         i2sRtttl->begin(rtttlFile.get(), audioOut.get());
@@ -90,6 +91,28 @@ class AudioThread : public concurrency::OSThread
     }
 
   private:
+    static float rtttlGain(const void *data, uint32_t len)
+    {
+        const auto *rtttl = static_cast<const char *>(data);
+        uint32_t volume = 20;
+        for (uint32_t i = 0; i + 3 < len && rtttl[i] != ':'; ++i) {
+            if (rtttl[i] != '~' || rtttl[i + 1] != 'v' || rtttl[i + 2] != '=')
+                continue;
+
+            uint32_t parsed = 0;
+            uint32_t j = i + 3;
+            while (j < len && rtttl[j] >= '0' && rtttl[j] <= '9') {
+                parsed = parsed * 10 + static_cast<uint32_t>(rtttl[j++] - '0');
+                if (parsed > 100)
+                    parsed = 100;
+            }
+            if (j > i + 3)
+                volume = parsed;
+            break;
+        }
+        return volume / 100.0f;
+    }
+
     // Amps like the NS4150 need time to leave shutdown, longer when the enable is an I/O expander write.
     // Without a variant's AUDIO_AMP_SETTLE_MS the short system tones are over before any audio gets out.
     static void ampEnable(bool on)

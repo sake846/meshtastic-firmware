@@ -40,6 +40,9 @@ constexpr uint32_t NODE_HEARD_UPDATE_INTERVAL_MS = 10000;
 constexpr uint8_t MAX_MICHIBIKI_SV_ID = MAX_QZSS_SATELLITES;
 std::atomic<uint8_t> diagnosticQzssCno[MAX_MICHIBIKI_SV_ID] = {};
 std::atomic<uint8_t> lastQzssCno[MAX_MICHIBIKI_SV_ID] = {};
+std::atomic<uint32_t> lastL1SBySatelliteMs[MAX_MICHIBIKI_SV_ID] = {};
+std::atomic<uint8_t> lastMessageTypeBySatellite[MAX_MICHIBIKI_SV_ID] = {};
+std::atomic<bool> hasL1SBySatellite[MAX_MICHIBIKI_SV_ID] = {};
 uint32_t lastNodeHeardUpdateMs[MAX_MICHIBIKI_SV_ID] = {};
 bool hasNodeHeardUpdate[MAX_MICHIBIKI_SV_ID] = {};
 
@@ -349,6 +352,104 @@ const char *dcxSeverityText(uint32_t severity)
     }
 }
 
+const char *dcrReportClassText(uint32_t reportClass)
+{
+    switch (reportClass) {
+    case 1:
+        return "最優先";
+    case 2:
+        return "優先";
+    case 3:
+        return "通常";
+    case 7:
+        return "訓練・試験";
+    default:
+        return nullptr;
+    }
+}
+
+const char *dcrHazardText(uint32_t hazard)
+{
+    switch (hazard) {
+    case 1:
+        return "緊急地震速報";
+    case 2:
+        return "震源情報";
+    case 3:
+        return "震度情報";
+    case 4:
+        return "東海地震情報";
+    case 5:
+        return "津波情報";
+    case 6:
+        return "北西太平洋津波情報";
+    case 8:
+        return "火山情報";
+    case 10:
+        return "気象情報";
+    case 11:
+        return "洪水情報";
+    case 12:
+        return "台風情報";
+    case 14:
+        return "海上警報";
+    default:
+        return nullptr;
+    }
+}
+
+bool formatDcrMessage(const uint8_t *frame, char *message, size_t capacity, size_t &position)
+{
+    const uint32_t reportClass = getBits(frame, 14, 3);
+    const uint32_t hazard = getBits(frame, 17, 4);
+    const uint32_t reportedAt = getBits(frame, 21, 20);
+    const uint32_t infoType = getBits(frame, 41, 2);
+    const uint32_t eventId = getBits(frame, 43, 10);
+    const char *reportClassText = dcrReportClassText(reportClass);
+    const char *hazardText = dcrHazardText(hazard);
+    static const char *const infoTypes[] = {"発表", "訂正", "取消", "未定義"};
+
+    message[0] = '\0';
+    position = 0;
+    if (!appendDcxText(message, capacity, position, "みちびき 災危通報\n種別:"))
+        return false;
+    if (hazardText) {
+        if (!appendDcxText(message, capacity, position, hazardText))
+            return false;
+    } else if (!appendDcxText(message, capacity, position, "コード") ||
+               !appendDcxNumber(message, capacity, position, static_cast<unsigned>(hazard))) {
+        return false;
+    }
+    if (!appendDcxText(message, capacity, position, "\n区分:"))
+        return false;
+    if (reportClassText) {
+        if (!appendDcxText(message, capacity, position, reportClassText))
+            return false;
+    } else if (!appendDcxText(message, capacity, position, "コード") ||
+               !appendDcxNumber(message, capacity, position, static_cast<unsigned>(reportClass))) {
+        return false;
+    }
+
+    if (!appendDcxText(message, capacity, position, "\n情報:") ||
+        !appendDcxText(message, capacity, position, infoTypes[infoType]))
+        return false;
+
+    const unsigned month = static_cast<unsigned>((reportedAt >> 16) & 0x0F);
+    const unsigned day = static_cast<unsigned>((reportedAt >> 11) & 0x1F);
+    const unsigned hour = static_cast<unsigned>((reportedAt >> 6) & 0x1F);
+    const unsigned minute = static_cast<unsigned>(reportedAt & 0x3F);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
+        char timeText[24];
+        std::snprintf(timeText, sizeof(timeText), "\n発表時刻:%02u/%02u %02u:%02u UTC", month, day, hour, minute);
+        if (!appendDcxText(message, capacity, position, timeText))
+            return false;
+    }
+    if (eventId && (!appendDcxText(message, capacity, position, "\n識別番号:") ||
+                    !appendDcxNumber(message, capacity, position, static_cast<unsigned>(eventId))))
+        return false;
+    return true;
+}
+
 bool formatDcxInstruction(uint32_t code, char *text, size_t capacity)
 {
     switch (code) {
@@ -570,8 +671,13 @@ void publishFrame(const uint8_t *payload)
     const uint32_t now = Time::getMillis();
     lastValidL1SMs = now;
     hasValidL1S = true;
-    if (svId > 0 && svId <= MAX_MICHIBIKI_SV_ID)
+    const uint8_t messageType = static_cast<uint8_t>(getBits(frame, 8, 6));
+    if (svId > 0 && svId <= MAX_MICHIBIKI_SV_ID) {
         ++l1sFramesBySatellite[svId - 1];
+        lastL1SBySatelliteMs[svId - 1].store(now);
+        lastMessageTypeBySatellite[svId - 1].store(messageType);
+        hasL1SBySatellite[svId - 1].store(true);
+    }
     const bool satelliteRegistered = registerMichibikiSatellite(svId);
     if (satelliteRegistered)
         recordMichibikiSatelliteReception(svId);
@@ -580,7 +686,6 @@ void publishFrame(const uint8_t *payload)
     lastCaptureMs.store(Time::getMillis());
     hasCapturedSatellite.store(true);
 
-    const uint8_t messageType = static_cast<uint8_t>(getBits(frame, 8, 6));
     if (messageType == 43) {
         ++l1sMt43Messages;
     } else if (messageType == 44) {
@@ -602,19 +707,8 @@ void publishFrame(const uint8_t *payload)
     char message[meshtastic_Constants_DATA_PAYLOAD_LEN];
     size_t position = 0;
     if (messageType == 43) {
-        const uint8_t reportClass = static_cast<uint8_t>(getBits(frame, 14, 3));
-        const uint8_t disasterCategory = static_cast<uint8_t>(getBits(frame, 17, 4));
-        const int length = std::snprintf(message, sizeof(message), "みちびき 災危通報 Rc=%u Dc=%u\n", static_cast<unsigned>(reportClass),
-                                         static_cast<unsigned>(disasterCategory));
-        if (length < 0 || static_cast<size_t>(length) >= sizeof(message))
+        if (!formatDcrMessage(frame, message, sizeof(message), position))
             return;
-        position = static_cast<size_t>(length);
-        for (uint8_t i = 0; i < sizeof(frame); ++i) {
-            const int written = std::snprintf(message + position, sizeof(message) - position, "%02X", frame[i]);
-            if (written != 2)
-                return;
-            position += static_cast<size_t>(written);
-        }
     } else {
         if (!formatDcxMessage(frame, message, sizeof(message), position))
             return;
@@ -777,6 +871,22 @@ bool getLastSatelliteCno(uint8_t svId, uint8_t &cno)
 
     cno = lastQzssCno[svId - 1].load();
     return cno != 0;
+}
+
+bool getSatelliteReceptionStatus(uint8_t svId, SatelliteReceptionStatus &status)
+{
+    if (svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
+        return false;
+
+    const uint8_t index = svId - 1;
+    status = {};
+    status.cno = lastQzssCno[index].load();
+    status.hasL1S = hasL1SBySatellite[index].load();
+    if (status.hasL1S) {
+        status.messageType = lastMessageTypeBySatellite[index].load();
+        status.lastL1SAgeSeconds = (Time::getMillis() - lastL1SBySatelliteMs[index].load()) / 1000;
+    }
+    return true;
 }
 
 void logDiagnostics(const char *powerState)
