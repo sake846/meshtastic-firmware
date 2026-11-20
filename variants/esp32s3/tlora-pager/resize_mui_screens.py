@@ -736,8 +736,11 @@ class PagerRotaryInputDriver final : public InputDriver
 
         const int16_t diff = encoderDiff;
         encoderDiff = 0;
+        const bool reverseSlider = diff && group && lv_group_get_editing(group) && focused &&
+                                   lv_obj_check_type(focused, &lv_slider_class);
+        const int16_t valueDiff = reverseSlider ? (diff == INT16_MIN ? INT16_MAX : -diff) : diff;
         data->key = endTextEdit || suppressEncoderClick ? 0 : LV_KEY_ENTER;
-        data->enc_diff = pagerMoveFocus(group, diff) ? 0 : diff;
+        data->enc_diff = pagerMoveFocus(group, valueDiff) ? 0 : valueDiff;
         data->state = buttonPressed && !suppressEncoderClick ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
         if (!buttonPressed)
             suppressEncoderClick = false;
