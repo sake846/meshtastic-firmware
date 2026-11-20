@@ -14,6 +14,7 @@
 #include "mesh/NodeDB.h"
 #include "mesh/Router.h"
 #include "mesh/Throttle.h"
+#include "mesh/TypeConversions.h"
 #include "modules/ExternalNotificationModule.h"
 #ifdef MESHTASTIC_ENCRYPTED_STORAGE
 #include "security/EncryptedStorage.h"
@@ -247,6 +248,37 @@ bool registerMichibikiSatellite(uint8_t svId)
     return isMichibikiSatelliteNode(nodeDB->getMeshNode(nodeNum), svId);
 }
 
+void sendMichibikiSatelliteIdentityToPhone(uint8_t svId)
+{
+    if (!nodeDB || !router || !service || svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
+        return;
+
+    const NodeNum nodeNum = MICHIBIKI_NODE_NUM_BASE + svId;
+    const auto *node = nodeDB->getMeshNode(nodeNum);
+    if (!isMichibikiSatelliteNode(node, svId))
+        return;
+
+    meshtastic_MeshPacket *packet = router->allocForSending();
+    if (!packet)
+        return;
+
+    const meshtastic_User satellite = TypeConversions::ConvertToUser(node);
+    packet->from = nodeNum;
+    packet->to = 0xffffffff;
+    packet->channel = channelIndex < MAX_NUM_CHANNELS ? channelIndex : 0;
+    if (!packet->has_rx_time)
+        packet->rx_time = Time::getUptimeSecs();
+    packet->decoded.portnum = meshtastic_PortNum_NODEINFO_APP;
+    packet->decoded.want_response = false;
+    packet->decoded.payload.size = pb_encode_to_bytes(packet->decoded.payload.bytes, sizeof(packet->decoded.payload.bytes),
+                                                      &meshtastic_User_msg, &satellite);
+    if (!packet->decoded.payload.size) {
+        service->releaseToPool(packet);
+        return;
+    }
+    service->sendToPhone(packet);
+}
+
 void recordMichibikiSatelliteReception(uint8_t svId)
 {
     if (svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
@@ -267,6 +299,7 @@ void recordMichibikiSatelliteReception(uint8_t svId)
     if (!packet.has_rx_time)
         packet.rx_time = Time::getUptimeSecs();
     nodeDB->updateFrom(packet);
+    sendMichibikiSatelliteIdentityToPhone(svId);
 }
 
 uint32_t frameHash(const uint8_t *frame)
