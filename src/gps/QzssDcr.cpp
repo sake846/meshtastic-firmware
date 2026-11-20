@@ -472,7 +472,7 @@ bool formatDcrMessage(const uint8_t *frame, char *message, size_t capacity, size
     const unsigned hour = static_cast<unsigned>((reportedAt >> 6) & 0x1F);
     const unsigned minute = static_cast<unsigned>(reportedAt & 0x3F);
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
-        char timeText[24];
+        char timeText[32];
         std::snprintf(timeText, sizeof(timeText), "\n発表時刻:%02u/%02u %02u:%02u UTC", month, day, hour, minute);
         if (!appendDcxText(message, capacity, position, timeText))
             return false;
