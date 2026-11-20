@@ -21,6 +21,8 @@ void earlyInitVariant()
     io.digitalWrite(EXPANDS_LORA_EN, HIGH);
     io.pinMode(EXPANDS_GPS_EN, OUTPUT);
     io.digitalWrite(EXPANDS_GPS_EN, HIGH);
+    io.pinMode(EXPANDS_GPS_RST, OUTPUT);
+    io.digitalWrite(EXPANDS_GPS_RST, HIGH);
     io.pinMode(EXPANDS_KB_RST, OUTPUT);
     io.digitalWrite(EXPANDS_KB_RST, HIGH);
     io.pinMode(EXPANDS_KB_EN, OUTPUT);
@@ -30,4 +32,12 @@ void earlyInitVariant()
     io.pinMode(EXPANDS_GPIO_EN, OUTPUT);
     io.digitalWrite(EXPANDS_GPIO_EN, HIGH);
     io.pinMode(EXPANDS_SD_PULLEN, INPUT);
+}
+
+void powerCyclePagerGpsReceiver()
+{
+    io.digitalWrite(EXPANDS_GPS_EN, LOW);
+    delay(250);
+    io.digitalWrite(EXPANDS_GPS_EN, HIGH);
+    delay(500);
 }

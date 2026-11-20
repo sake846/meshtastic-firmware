@@ -196,6 +196,9 @@ void playGPSDisableBeep()
 
 void playStartMelody()
 {
+    if (!moduleConfig.external_notification.alert_message_buzzer)
+        return;
+
     ToneDuration melody[] = {{NOTE_FS3, DURATION_1_8}, {NOTE_AS3, DURATION_1_8}, {NOTE_CS4, DURATION_1_4}};
     playTones(melody, sizeof(melody) / sizeof(ToneDuration));
 }

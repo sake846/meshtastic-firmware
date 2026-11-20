@@ -933,6 +933,18 @@ bool GPS::setup()
                 if (gnssModel != GNSS_MODEL_UNKNOWN) {
                     detectedBaud = rareSerialSpeeds[speedSelect];
                 } else if (currentStep == 0 && ++speedSelect == array_count(rareSerialSpeeds)) {
+#if defined(T_LORA_PAGER)
+                    if (!pagerGpsPowerCycled) {
+                        LOG_WARN("GPS probe failed; power-cycling Pager GNSS and retrying");
+                        pagerGpsPowerCycled = true;
+                        powerCyclePagerGpsReceiver();
+                        speedSelect = 0;
+                        probeTries = 0;
+                        currentStep = 0;
+                        currentDelay = 2000;
+                        return false;
+                    }
+#endif
                     LOG_WARN("Give up GPS probe, set to %d", GPS_BAUDRATE);
                     return true;
                 }
