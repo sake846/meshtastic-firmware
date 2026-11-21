@@ -24,7 +24,10 @@
 #include "main.h"
 #include "mesh/Throttle.h"
 #include "mesh/generated/meshtastic/rtttl.pb.h"
+#include "UptimeClock.h"
 #include <Arduino.h>
+#include <algorithm>
+#include <vector>
 
 #if HAS_LIBNOTIFY
 #include "meshUtils.h"
@@ -78,6 +81,46 @@ ExternalNotificationModule *externalNotificationModule;
 bool externalCurrentState[3] = {};
 
 uint32_t externalTurnedOn[3] = {};
+
+namespace {
+constexpr uint32_t duplicateMessageWindowSecs = 60 * 60;
+
+struct RecentMessageAlert {
+    uint64_t fingerprint;
+    uint32_t receivedAt;
+};
+
+std::vector<RecentMessageAlert> recentMessageAlerts;
+
+bool isRecentDuplicateMessage(const meshtastic_MeshPacket &mp)
+{
+    const uint32_t now = Time::getUptimeSecs();
+    recentMessageAlerts.erase(std::remove_if(recentMessageAlerts.begin(), recentMessageAlerts.end(), [now](const auto &entry) {
+                                  return static_cast<uint32_t>(now - entry.receivedAt) > duplicateMessageWindowSecs;
+                              }),
+                              recentMessageAlerts.end());
+
+    uint64_t fingerprint = 14695981039346656037ULL;
+    const auto addByte = [&fingerprint](uint8_t byte) { fingerprint = (fingerprint ^ byte) * 1099511628211ULL; };
+    for (unsigned shift = 0; shift < 32; shift += 8)
+        addByte(static_cast<uint8_t>(mp.from >> shift));
+    addByte(mp.channel);
+    const uint16_t size = mp.decoded.payload.size;
+    addByte(static_cast<uint8_t>(size));
+    addByte(static_cast<uint8_t>(size >> 8));
+    for (uint16_t i = 0; i < size; ++i)
+        addByte(mp.decoded.payload.bytes[i]);
+
+    const auto duplicate = std::find_if(recentMessageAlerts.begin(), recentMessageAlerts.end(), [fingerprint](const auto &entry) {
+        return entry.fingerprint == fingerprint;
+    });
+    if (duplicate != recentMessageAlerts.end())
+        return true;
+
+    recentMessageAlerts.push_back({fingerprint, now});
+    return false;
+}
+} // namespace
 
 int32_t ExternalNotificationModule::runOnce()
 {
@@ -418,6 +461,9 @@ ExternalNotificationModule::ExternalNotificationModule()
 
 ProcessMessage ExternalNotificationModule::handleReceived(const meshtastic_MeshPacket &mp)
 {
+    if (!isFromUs(&mp) && isRecentDuplicateMessage(mp))
+        return ProcessMessage::CONTINUE;
+
     // Trigger external notification if enabled and not muted; isSilenced is from temporary mute toggles
     if (moduleConfig.external_notification.enabled && !isSilenced) {
         if (!isFromUs(&mp)) {
