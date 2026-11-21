@@ -71,10 +71,7 @@ uint32_t l1sPreambleRejects = 0;
 uint32_t l1sPreambleMatches = 0;
 uint32_t l1sCrcRejects = 0;
 uint32_t l1sCrcMatches = 0;
-uint32_t l1sOtherMessageTypes = 0;
-uint32_t l1sMt43Messages = 0;
-uint32_t l1sMt44Messages = 0;
-uint32_t l1sMt63Messages = 0;
+uint32_t l1sMessageTypeCounts[64] = {};
 uint32_t l1sFramesBySatellite[MAX_MICHIBIKI_SV_ID] = {};
 uint32_t lastValidL1SMs = 0;
 uint32_t lastMt43Or44Ms = 0;
@@ -719,17 +716,11 @@ void publishFrame(const uint8_t *payload)
     lastCaptureMs.store(Time::getMillis());
     hasCapturedSatellite.store(true);
 
-    if (messageType == 43) {
-        ++l1sMt43Messages;
-    } else if (messageType == 44) {
-        ++l1sMt44Messages;
-    } else if (messageType == 63) {
-        ++l1sMt63Messages;
+    ++l1sMessageTypeCounts[messageType];
+    if (messageType == 63)
         return;
-    } else {
-        ++l1sOtherMessageTypes;
+    if (messageType != 43 && messageType != 44)
         return;
-    }
     lastMt43Or44Ms = now;
     hasMt43Or44 = true;
 
@@ -929,15 +920,38 @@ void logDiagnostics(const char *powerState)
         return;
 
     LOG_INFO("QZSS L1S/30s: SFRBX=%lu badCK=%lu large=%lu badLen=%lu otherSig=%lu L1S=%lu badWords=%lu "
-             "PAB=%lu/%lu CRC=%lu/%lu MT43=%lu MT44=%lu MT63=%lu otherMT=%lu",
+             "PAB=%lu/%lu CRC=%lu/%lu",
              static_cast<unsigned long>(sfrbxMessages), static_cast<unsigned long>(sfrbxChecksumErrors),
              static_cast<unsigned long>(sfrbxOversizeMessages), static_cast<unsigned long>(sfrbxLengthErrors),
              static_cast<unsigned long>(nonL1sSfrbxMessages), static_cast<unsigned long>(l1sSfrbxMessages),
              static_cast<unsigned long>(l1sWordCountErrors), static_cast<unsigned long>(l1sPreambleMatches),
              static_cast<unsigned long>(l1sPreambleRejects), static_cast<unsigned long>(l1sCrcMatches),
-             static_cast<unsigned long>(l1sCrcRejects), static_cast<unsigned long>(l1sMt43Messages),
-             static_cast<unsigned long>(l1sMt44Messages), static_cast<unsigned long>(l1sMt63Messages),
-             static_cast<unsigned long>(l1sOtherMessageTypes));
+             static_cast<unsigned long>(l1sCrcRejects));
+
+    char messageTypeSummary[128] = {};
+    size_t messageTypePosition = 0;
+    for (uint8_t messageType = 0; messageType < 64; ++messageType) {
+        const uint32_t count = l1sMessageTypeCounts[messageType];
+        if (!count)
+            continue;
+        char entry[24];
+        const int entryLength = std::snprintf(entry, sizeof(entry), "%u=%lu", static_cast<unsigned>(messageType),
+                                              static_cast<unsigned long>(count));
+        if (entryLength < 0 || static_cast<size_t>(entryLength) >= sizeof(entry))
+            continue;
+        const size_t separatorLength = messageTypePosition ? 1 : 0;
+        if (messageTypePosition + separatorLength + static_cast<size_t>(entryLength) >= sizeof(messageTypeSummary)) {
+            LOG_INFO("QZSS MT/30s: %s", messageTypeSummary);
+            messageTypePosition = 0;
+            messageTypeSummary[0] = '\0';
+        }
+        if (messageTypePosition)
+            messageTypeSummary[messageTypePosition++] = ',';
+        std::memcpy(messageTypeSummary + messageTypePosition, entry, static_cast<size_t>(entryLength));
+        messageTypePosition += static_cast<size_t>(entryLength);
+        messageTypeSummary[messageTypePosition] = '\0';
+    }
+    LOG_INFO("QZSS MT/30s: %s", messageTypePosition ? messageTypeSummary : "none");
 
     char satelliteSummary[384] = {};
     size_t position = 0;
@@ -980,10 +994,7 @@ void logDiagnostics(const char *powerState)
     l1sPreambleMatches = 0;
     l1sCrcRejects = 0;
     l1sCrcMatches = 0;
-    l1sOtherMessageTypes = 0;
-    l1sMt43Messages = 0;
-    l1sMt44Messages = 0;
-    l1sMt63Messages = 0;
+    std::memset(l1sMessageTypeCounts, 0, sizeof(l1sMessageTypeCounts));
     std::memset(l1sFramesBySatellite, 0, sizeof(l1sFramesBySatellite));
 }
 
