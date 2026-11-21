@@ -2036,8 +2036,16 @@ class LipoCharger : public HasBatteryLevel
     void recoverI2CBus()
     {
 #ifdef ARCH_ESP32
-        Wire.end();
-        Wire.begin(I2C_SDA, I2C_SCL);
+        LOG_WARN("BQ27220 I2C recovery: stopping shared Wire bus");
+        if (!Wire.end()) {
+            LOG_ERROR("BQ27220 I2C recovery failed: Wire.end()");
+            return;
+        }
+        if (!Wire.begin(I2C_SDA, I2C_SCL)) {
+            LOG_ERROR("BQ27220 I2C recovery failed: Wire.begin()");
+            return;
+        }
+        LOG_INFO("BQ27220 I2C recovery succeeded");
 #endif
     }
 
