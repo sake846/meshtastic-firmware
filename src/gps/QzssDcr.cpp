@@ -38,7 +38,18 @@ constexpr uint8_t SETTINGS_VERSION = 1;
 constexpr uint32_t CAPTURE_TIMEOUT_MS = 15000;
 constexpr uint32_t DIAGNOSTIC_LOG_INTERVAL_MS = 30000;
 constexpr uint32_t NODE_HEARD_UPDATE_INTERVAL_MS = 10000;
+// UI timestamps have second precision, so allow the rounding remainder at the one-hour boundary.
+constexpr uint32_t MESSAGE_DEDUP_INTERVAL_MS = 60 * 60 * 1000 + 999;
 constexpr uint8_t MAX_MICHIBIKI_SV_ID = MAX_QZSS_SATELLITES;
+// shortcut: keeps 128 unique QZSS messages; increase if the one-hour window can exceed this volume.
+constexpr size_t RECENT_MESSAGE_CAPACITY = 128;
+
+struct RecentMessage {
+    uint64_t fingerprint;
+    uint32_t receivedAtMs;
+    bool used;
+};
+
 std::atomic<uint8_t> diagnosticQzssCno[MAX_MICHIBIKI_SV_ID] = {};
 std::atomic<uint8_t> lastQzssCno[MAX_MICHIBIKI_SV_ID] = {};
 std::atomic<uint32_t> lastL1SBySatelliteMs[MAX_MICHIBIKI_SV_ID] = {};
@@ -48,8 +59,7 @@ uint32_t lastNodeHeardUpdateMs[MAX_MICHIBIKI_SV_ID] = {};
 bool hasNodeHeardUpdate[MAX_MICHIBIKI_SV_ID] = {};
 
 uint8_t channelIndex = NO_CHANNEL;
-uint32_t recentFrames[16] = {};
-uint8_t recentFrameIndex = 0;
+RecentMessage recentMessages[RECENT_MESSAGE_CAPACITY] = {};
 std::atomic<bool> enabled{true};
 std::atomic<bool> m10Detected{false};
 std::atomic<bool> settingsLoaded{false};
@@ -299,22 +309,48 @@ void recordMichibikiSatelliteReception(uint8_t svId)
     sendMichibikiSatelliteIdentityToPhone(svId);
 }
 
-uint32_t frameHash(const uint8_t *frame)
+uint64_t messageFingerprint(const meshtastic_MeshPacket &packet)
 {
-    uint32_t hash = 2166136261UL;
-    for (uint16_t bit = 8; bit < 226; ++bit) {
-        hash ^= (frame[bit / 8] >> (7 - bit % 8)) & 1;
-        hash *= 16777619UL;
-    }
+    uint64_t hash = 14695981039346656037ULL;
+    const auto addByte = [&hash](uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
+    for (unsigned shift = 0; shift < 32; shift += 8)
+        addByte(static_cast<uint8_t>(packet.from >> shift));
+    addByte(packet.channel);
+    addByte(static_cast<uint8_t>(packet.decoded.payload.size));
+    addByte(static_cast<uint8_t>(packet.decoded.payload.size >> 8));
+    for (uint16_t i = 0; i < packet.decoded.payload.size; ++i)
+        addByte(packet.decoded.payload.bytes[i]);
     return hash;
 }
 
-bool seenRecently(uint32_t hash)
+bool isDuplicateQzssMessage(const meshtastic_MeshPacket &packet)
 {
-    for (uint32_t recent : recentFrames)
-        if (recent == hash)
+    const uint64_t fingerprint = messageFingerprint(packet);
+    const uint32_t now = Time::getMillis();
+    size_t availableIndex = RECENT_MESSAGE_CAPACITY;
+    size_t oldestIndex = RECENT_MESSAGE_CAPACITY;
+    uint32_t oldestAge = 0;
+
+    for (size_t i = 0; i < RECENT_MESSAGE_CAPACITY; ++i) {
+        const RecentMessage &recent = recentMessages[i];
+        if (!recent.used || Throttle::hasElapsed(recent.receivedAtMs, MESSAGE_DEDUP_INTERVAL_MS)) {
+            if (availableIndex == RECENT_MESSAGE_CAPACITY)
+                availableIndex = i;
+            continue;
+        }
+        if (recent.fingerprint == fingerprint)
             return true;
-    recentFrames[recentFrameIndex++ % (sizeof(recentFrames) / sizeof(recentFrames[0]))] = hash;
+
+        const uint32_t age = now - recent.receivedAtMs;
+        if (oldestIndex == RECENT_MESSAGE_CAPACITY || age > oldestAge) {
+            oldestIndex = i;
+            oldestAge = age;
+        }
+    }
+
+    if (availableIndex == RECENT_MESSAGE_CAPACITY)
+        availableIndex = oldestIndex;
+    recentMessages[availableIndex] = {fingerprint, now, true};
     return false;
 }
 
@@ -724,8 +760,7 @@ void publishFrame(const uint8_t *payload)
     lastMt43Or44Ms = now;
     hasMt43Or44 = true;
 
-    frame[31] &= 0xC0;
-    if (seenRecently(frameHash(frame)) || channelIndex == NO_CHANNEL || !router || !service)
+    if (channelIndex == NO_CHANNEL || !router || !service)
         return;
 
     char message[meshtastic_Constants_DATA_PAYLOAD_LEN];
@@ -750,11 +785,13 @@ void publishFrame(const uint8_t *payload)
         packet->from = MICHIBIKI_NODE_NUM_BASE + svId;
     }
 
+    const bool duplicate = isDuplicateQzssMessage(*packet);
 #if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
-    messageStore.tryAddFromPacket(*packet);
+    if (!duplicate)
+        messageStore.tryAddFromPacket(*packet);
 #endif
     service->sendToPhone(packet);
-    if (externalNotificationModule)
+    if (!duplicate && externalNotificationModule)
         externalNotificationModule->startNotification();
 }
 
