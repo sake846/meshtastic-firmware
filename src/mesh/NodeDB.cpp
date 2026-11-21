@@ -3983,10 +3983,9 @@ bool NodeDB::updateUser(uint32_t nodeId, meshtastic_User &p, uint8_t channelInde
     }
     if (nodeId != getNodeNum())
         info->channel = channelIndex; // Set channel we need to use to reach this node (but don't set our own channel)
-    LOG_DEBUG("Update changed=%d user %s/%s, id=0x%08x, channel=%d", changed, info->long_name, info->short_name, nodeId,
-              info->channel);
-
     if (changed) {
+        LOG_DEBUG("Update changed=%d user %s/%s, id=0x%08x, channel=%d", changed, info->long_name, info->short_name,
+                  nodeId, info->channel);
         updateGUIforNode = info;
         notifyObservers(true); // Force an update whether or not our node counts have changed
 

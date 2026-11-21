@@ -75,7 +75,8 @@ size_t RedirectablePrint::vprintf(const char *logLevel, const char *format, va_l
         printBuf[sizeof(printBuf) - 2] = '\n';
     }
     for (size_t f = 0; f < len; f++) {
-        if (!std::isprint(static_cast<unsigned char>(printBuf[f])) && printBuf[f] != '\n')
+        const auto c = static_cast<unsigned char>(printBuf[f]);
+        if (c < 0x80 && !std::isprint(c) && c != '\n')
             printBuf[f] = '#';
     }
     // A message with its own "[Tag] " (the device-ui task has no OSThread)

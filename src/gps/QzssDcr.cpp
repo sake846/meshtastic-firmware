@@ -453,7 +453,7 @@ bool formatDcrMessage(const uint8_t *frame, char *message, size_t capacity, size
                !appendDcxNumber(message, capacity, position, static_cast<unsigned>(hazard))) {
         return false;
     }
-    if (!appendDcxText(message, capacity, position, "\n区分:"))
+    if (!appendDcxText(message, capacity, position, " 区分:"))
         return false;
     if (reportClassText) {
         if (!appendDcxText(message, capacity, position, reportClassText))
@@ -463,7 +463,7 @@ bool formatDcrMessage(const uint8_t *frame, char *message, size_t capacity, size
         return false;
     }
 
-    if (!appendDcxText(message, capacity, position, "\n情報:") ||
+    if (!appendDcxText(message, capacity, position, " 情報:") ||
         !appendDcxText(message, capacity, position, infoTypes[infoType]))
         return false;
 
