@@ -3585,7 +3585,7 @@ inline const char *lookup(Id id, uint64_t code, char *scratch, size_t capacity)
     switch (id) {
     case Id::DepthOfHypocenter:
         if (code <= 500) {
-            std::snprintf(scratch, capacity, "%llukm", static_cast<unsigned long long>(code));
+            std::snprintf(scratch, capacity, "%ukm", static_cast<unsigned>(code));
             return scratch;
         }
         if (code == 501)
@@ -3595,8 +3595,7 @@ inline const char *lookup(Id id, uint64_t code, char *scratch, size_t capacity)
         return nullptr;
     case Id::EewMagnitude:
         if (code >= 1 && code <= 100) {
-            std::snprintf(scratch, capacity, "%llu.%llu", static_cast<unsigned long long>(code / 10),
-                          static_cast<unsigned long long>(code % 10));
+            std::snprintf(scratch, capacity, "%u.%u", static_cast<unsigned>(code / 10), static_cast<unsigned>(code % 10));
             return scratch;
         }
         if (code == 101)
@@ -3606,8 +3605,7 @@ inline const char *lookup(Id id, uint64_t code, char *scratch, size_t capacity)
         return nullptr;
     case Id::HypocenterMagnitude:
         if (code >= 1 && code <= 100) {
-            std::snprintf(scratch, capacity, "%llu.%llu", static_cast<unsigned long long>(code / 10),
-                          static_cast<unsigned long long>(code % 10));
+            std::snprintf(scratch, capacity, "%u.%u", static_cast<unsigned>(code / 10), static_cast<unsigned>(code % 10));
             return scratch;
         }
         if (code == 101)
@@ -3619,19 +3617,19 @@ inline const char *lookup(Id id, uint64_t code, char *scratch, size_t capacity)
         return nullptr;
     case Id::ExpectedAshFallTime:
         if (code >= 1 && code <= 6) {
-            std::snprintf(scratch, capacity, "%llu時間", static_cast<unsigned long long>(code));
+            std::snprintf(scratch, capacity, "%u時間", static_cast<unsigned>(code));
             return scratch;
         }
         return nullptr;
     case Id::TyphoonCentralPressure:
         if (code <= 1100) {
-            std::snprintf(scratch, capacity, "%lluhPa", static_cast<unsigned long long>(code));
+            std::snprintf(scratch, capacity, "%uhPa", static_cast<unsigned>(code));
             return scratch;
         }
         return nullptr;
     case Id::TyphoonElapsedTimeFromReferenceTime:
         if (code <= 127) {
-            std::snprintf(scratch, capacity, "%llu時間後", static_cast<unsigned long long>(code));
+            std::snprintf(scratch, capacity, "%u時間後", static_cast<unsigned>(code));
             return scratch;
         }
         return nullptr;
@@ -3640,13 +3638,13 @@ inline const char *lookup(Id id, uint64_t code, char *scratch, size_t capacity)
         if (code == 0)
             return "不明";
         if (code >= 15 && code <= 105) {
-            std::snprintf(scratch, capacity, "%llum/s", static_cast<unsigned long long>(code));
+            std::snprintf(scratch, capacity, "%um/s", static_cast<unsigned>(code));
             return scratch;
         }
         return nullptr;
     case Id::TyphoonNumber:
         if (code >= 1 && code <= 99) {
-            std::snprintf(scratch, capacity, "%llu号", static_cast<unsigned long long>(code));
+            std::snprintf(scratch, capacity, "%u号", static_cast<unsigned>(code));
             return scratch;
         }
         return nullptr;
