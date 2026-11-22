@@ -1048,7 +1048,10 @@ bool appendDcrArrayValues(DecodedQzssMessages &messages, const uint8_t *frame, c
                          QzssDcrCodeTables::Id table = QzssDcrCodeTables::Id::None, uint8_t recordWidth = 0)
 {
     constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
-    char line[capacity];
+    // GPS frame decoding is single-threaded; keep its formatting buffers off the loop task stack.
+    static char line[capacity];
+    static char meaningBuffer[192];
+    static char valueText[capacity];
     int prefix = std::snprintf(line, sizeof(line), "%s=", name);
     if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
         return false;
@@ -1060,11 +1063,9 @@ bool appendDcrArrayValues(DecodedQzssMessages &messages, const uint8_t *frame, c
             break;
 
         const uint64_t value = getBits64(frame, recordBit + fieldOffset, width);
-        char meaningBuffer[192];
         const char *meaning =
             table == QzssDcrCodeTables::Id::None ? nullptr : QzssDcrCodeTables::lookup(table, value, meaningBuffer,
                                                                                        sizeof(meaningBuffer));
-        char valueText[capacity];
         const int valueLength = meaning
                                     ? std::snprintf(valueText, sizeof(valueText), "%llu(%s)",
                                                    static_cast<unsigned long long>(value), meaning)
