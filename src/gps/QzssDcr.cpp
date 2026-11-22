@@ -1052,10 +1052,12 @@ bool appendDcrArrayValues(DecodedQzssMessages &messages, const uint8_t *frame, c
     static char line[capacity];
     static char meaningBuffer[192];
     static char valueText[capacity];
-    int prefix = std::snprintf(line, sizeof(line), "%s=", name);
-    if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
+    const size_t nameLength = std::strlen(name);
+    if (nameLength + 1 >= sizeof(line))
         return false;
-    size_t position = static_cast<size_t>(prefix);
+    std::memcpy(line, name, nameLength);
+    line[nameLength] = '=';
+    size_t position = nameLength + 1;
     bool hasValues = false;
     for (uint8_t i = 0; i < count; ++i) {
         const uint16_t recordBit = firstBit + i * stride;
@@ -1066,25 +1068,43 @@ bool appendDcrArrayValues(DecodedQzssMessages &messages, const uint8_t *frame, c
         const char *meaning =
             table == QzssDcrCodeTables::Id::None ? nullptr : QzssDcrCodeTables::lookup(table, value, meaningBuffer,
                                                                                        sizeof(meaningBuffer));
-        const int valueLength = meaning
-                                    ? std::snprintf(valueText, sizeof(valueText), "%llu(%s)",
-                                                   static_cast<unsigned long long>(value), meaning)
-                                    : table == QzssDcrCodeTables::Id::None
-                                          ? std::snprintf(valueText, sizeof(valueText), "%llu",
-                                                          static_cast<unsigned long long>(value))
-                                          : std::snprintf(valueText, sizeof(valueText), "%llu(未定義コード)",
-                                                          static_cast<unsigned long long>(value));
-        if (valueLength < 0 || static_cast<size_t>(valueLength) >= sizeof(valueText))
+        size_t length = 0;
+        uint64_t digits = value;
+        do {
+            valueText[length++] = static_cast<char>('0' + digits % 10);
+            digits /= 10;
+        } while (digits && length < sizeof(valueText));
+        if (digits)
             return false;
-        size_t length = static_cast<size_t>(valueLength);
+        for (size_t left = 0, right = length - 1; left < right; ++left, --right) {
+            const char digit = valueText[left];
+            valueText[left] = valueText[right];
+            valueText[right] = digit;
+        }
+
+        const char *description = meaning;
+        if (!description && table != QzssDcrCodeTables::Id::None)
+            description = "未定義コード";
+        if (description) {
+            const size_t descriptionLength = std::strlen(description);
+            if (length + descriptionLength + 3 > sizeof(valueText))
+                return false;
+            valueText[length++] = '(';
+            std::memcpy(valueText + length, description, descriptionLength);
+            length += descriptionLength;
+            valueText[length++] = ')';
+        }
+        valueText[length] = '\0';
         if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line)) {
             line[position] = '\0';
             if (!appendDecodedQzssLine(messages, line))
                 return false;
-            prefix = std::snprintf(line, sizeof(line), "%s(続き)=", name);
-            if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
+            constexpr char continuation[] = "(続き)=";
+            if (nameLength + sizeof(continuation) - 1 >= sizeof(line))
                 return false;
-            position = static_cast<size_t>(prefix);
+            std::memcpy(line, name, nameLength);
+            std::memcpy(line + nameLength, continuation, sizeof(continuation));
+            position = nameLength + sizeof(continuation) - 1;
             hasValues = false;
         }
         if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line))
@@ -1097,7 +1117,12 @@ bool appendDcrArrayValues(DecodedQzssMessages &messages, const uint8_t *frame, c
         hasValues = true;
     }
     if (!hasValues) {
-        std::snprintf(line, sizeof(line), "%s=なし", name);
+        constexpr char noValues[] = "なし";
+        if (nameLength + sizeof(noValues) >= sizeof(line))
+            return false;
+        std::memcpy(line, name, nameLength);
+        line[nameLength] = '=';
+        std::memcpy(line + nameLength + 1, noValues, sizeof(noValues));
         return appendDecodedQzssLine(messages, line);
     }
     return appendDecodedQzssLine(messages, line);
