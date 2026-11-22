@@ -2070,7 +2070,8 @@ void publishFrame(const uint8_t *payload)
     if (channelIndex == NO_CHANNEL || !router || !service)
         return;
 
-    DecodedQzssMessages messages;
+    // GPS parsing is single-threaded; keep this multi-kilobyte buffer off the loop task stack.
+    static DecodedQzssMessages messages;
     if (messageType == 43) {
         if (!formatDcrMessage(frame, svId, messages))
             return;
