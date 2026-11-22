@@ -1317,10 +1317,15 @@ elif pager_read_new not in data:
         data[reader_start:reader_end] if reader_start >= 0 and reader_end >= 0 else b""
     )
     if (
-        b"static uint8_t modifiers = 0;" not in previous_reader
-        or b"LV_KEY_NEXT : LV_KEY_ENTER" not in previous_reader
+        b"static uint8_t modifiers = 0;" in previous_reader
+        and b"LV_KEY_NEXT : LV_KEY_ENTER" in previous_reader
+    ):
+        data = data[:reader_start] + pager_read_new + newline + data[reader_end:]
+    elif not (
+        b"static bool releasePending = false;" in previous_reader
+        and b"pagerKeyboardModifiers" in previous_reader
+        and b"data->continue_reading = true;" in previous_reader
     ):
         raise RuntimeError("unexpected meshtastic-device-ui Pager keyboard reader")
-    data = data[:reader_start] + pager_read_new + newline + data[reader_end:]
 
 keyboard_source.write_bytes(data)
