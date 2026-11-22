@@ -4,6 +4,7 @@
 #include "MessageStore.h"
 #endif
 #include "QzssDcr.h"
+#include "QzssDcrCodeTables.h"
 #include "FSCommon.h"
 #include "SafeFile.h"
 #include "SPILock.h"
@@ -389,11 +390,11 @@ const char *dcxHazardText(uint32_t code)
 {
     switch (code) {
     case 1:
-        return "CBRNE空爆";
+        return "危険物質等による空爆";
     case 2:
-        return "CBRNEのITシステム攻撃";
+        return "危険物質等を用いた情報システム攻撃";
     case 3:
-        return "CBRNE核兵器攻撃";
+        return "核兵器による攻撃";
     case 4:
         return "生物災害";
     case 5:
@@ -501,7 +502,7 @@ const char *dcxHazardText(uint32_t code)
     case 56:
         return "ガス供給停止";
     case 57:
-        return "ITシステム停止";
+        return "情報システム停止";
     case 58:
         return "停電";
     case 59:
@@ -625,17 +626,17 @@ const char *dcxCountryText(uint32_t code)
 {
     switch (code) {
     case 10:
-        return "Australia";
+        return "オーストラリア";
     case 71:
-        return "Fiji";
+        return "フィジー";
     case 111:
         return "日本";
     case 219:
-        return "Thailand";
+        return "タイ";
     case 500:
-        return "EU組織";
+        return "欧州連合機関";
     case 501:
-        return "国連組織";
+        return "国連機関";
     case 502:
         return "国際";
     default:
@@ -645,13 +646,14 @@ const char *dcxCountryText(uint32_t code)
 
 const char *dcxProviderText(uint32_t country, uint32_t provider)
 {
-    static const char *const japan[] = {"未使用", "FMMC", "FDMA", "関係省庁", "自治体"};
-    static const char *const australia[] = {"未使用", "NEMA", "BOM", "ACS", "Geoscience Australia", "CSIRO", "ABS",
-                                            "Resilience NSW", "SES NSW", "NSW RFS", "JATWC", "Flood Knowledge Centre",
-                                            "ABC"};
-    static const char *const fiji[] = {"未使用", "NDMO", "FMS", "FWA", "MRD", "Fiji Broadcasting Corporation"};
-    static const char *const thailand[] = {"未使用", "DDPM", "TMD", "NDWC", "DMR", "Navy Hydrographic Department",
-                                           "DWR", "RID", "DPC", "GISTDA", "EGAT", "RFD", "DPWPC"};
+    static const char *const japan[] = {"未使用", "マルチメディア振興センター", "消防庁", "関係省庁", "自治体"};
+    static const char *const australia[] = {"未使用", "国家緊急事態管理庁", "気象局", "気候サービス", "地球科学機構", "連邦科学産業研究機構",
+                                            "統計局", "ニューサウスウェールズ州復興庁", "同州緊急サービス", "同州地方消防局",
+                                            "合同津波警報センター", "洪水情報センター", "放送協会"};
+    static const char *const fiji[] = {"未使用", "国家災害管理局", "気象局", "水道公社水文部門", "鉱物資源局", "放送協会"};
+    static const char *const thailand[] = {"未使用", "防災軽減局", "気象局", "国家災害警報センター", "鉱物資源局", "海軍水路部",
+                                           "水資源局", "灌漑局", "公害管理局", "地理情報・宇宙技術開発機関", "発電公社",
+                                           "森林局", "国立公園・野生生物・植物保全局", "水危機対策センター"};
     const char *const *names = nullptr;
     size_t count = 0;
     switch (country) {
@@ -675,6 +677,180 @@ const char *dcxProviderText(uint32_t country, uint32_t provider)
         return "国・地域別定義";
     }
     return provider < count ? names[provider] : "予約";
+}
+
+const char *dcxInternationalInstructionA(uint32_t code)
+{
+    static const char *const instructions[] = {
+        "指示なし", "危険区域から退避", "指定避難先へ退避", "建物内に避難", "地下・低層階へ避難", "山地から下山",
+        "屋内へ・車は路肩停車", "伏せて頭と首を保護", "避難準備", "非常物資を準備", "窓ガラスから離れる",
+        "節電", "節水", "水道水は煮沸", "人との距離を確保・手洗い", "水道水を飲まない", "ガス漏れと火気に注意",
+        "外出・車の使用を避ける", "不審物やがれきに触れない", "煙の充満した部屋に入らない", "地下室に入らない",
+        "ペット・家畜を屋内へ", "死んだ動物に触れない", "運転を避ける", "雷の間は金属・水を避ける",
+        "屋根直下や大空間を避ける", "屋外・高所・電線から離れる", "危険区域を避ける", "不要不急の外出を避ける",
+        "試験情報・対応不要", "従来の警報を更新", "警報基準を下回った状態"};
+    return code < sizeof(instructions) / sizeof(instructions[0]) ? instructions[code] : "未定義の行動指示";
+}
+
+const char *dcxInternationalInstructionB(uint32_t code)
+{
+    static const char *const instructions[] = {
+        "指示なし", "気象機関・自治体に確認", "公式な情報提供先を確認", "要配慮者は外出を控える", "救助活動中・移動を控える",
+        "要配慮者を支援", "警察・消防の発表を確認", "公式発表を継続確認", "避難支援を要請", "緊急時以外の通話を控える",
+        "極端な悪天候・厳重警戒", "悪天候・事前の備え", "悪天候・最新情報を確認", "洪水に備える", "浸水場所に近づかない",
+        "頑丈な建物内に避難", "高温・熱中症に注意", "山火事警戒・火気禁止", "火災を予防", "津波から高所へ避難",
+        "海に出ず海岸から離れる", "影響区域から高所へ避難", "地震時は身を守り揺れ後に避難", "危険物質と風下を避ける",
+        "換気を止め窓を閉める", "ヨウ素剤を準備・まだ服用しない", "指示に従いヨウ素剤を服用", "節水",
+        "避難できない場合は屋内退避", "未定義の指示", "未定義の指示", "従来の警報を更新"};
+    return code < sizeof(instructions) / sizeof(instructions[0]) ? instructions[code] : "未定義の行動指示";
+}
+
+const char *dcxSecondEllipseInstruction(uint32_t code)
+{
+    static const char *const instructions[32] = {
+        "指示なし", "避難準備", "非常物資を準備", "洪水に備える", "ヨウ素剤を準備・まだ服用しない", "スマートフォンを充電",
+        "エレベーターを使わない", "危険区域を避ける", "運転を避ける", "救助活動中・移動を控える", "気象機関・自治体に確認",
+        "公式な情報提供先を確認", "要配慮者は外出を控える", "要配慮者を支援", "警察・消防の発表を確認", "公式発表を継続確認",
+        "緊急時以外の通話を控える", "未定義の指示", "未定義の指示", "未定義の指示", "未定義の指示", "未定義の指示",
+        "未定義の指示", "未定義の指示", "未定義の指示", "未定義の指示", "未定義の指示", "未定義の指示",
+        "未定義の指示", "未定義の指示", "試験情報・対応不要", "警報基準を下回った状態"};
+    return instructions[code & 0x1F];
+}
+
+template <size_t N> const char *dcxDetailTableText(const char *const (&table)[N], uint32_t code)
+{
+    return code < N ? table[code] : "未定義コード";
+}
+
+const char *dcxHazardDetailText(uint8_t field, uint32_t code)
+{
+    static const char *const d1[] = {"マグニチュード1.0-1.9", "マグニチュード2.0-2.9", "マグニチュード3.0-3.9",
+                                     "マグニチュード4.0-4.9", "マグニチュード5.0-5.9", "マグニチュード6.0-6.9",
+                                     "マグニチュード7.0-7.9", "マグニチュード8.0-8.9", "マグニチュード9.0以上"};
+    static const char *const d2[] = {"震度2", "震度3", "震度4", "震度5弱", "震度5強", "震度6弱", "震度6強", "震度7"};
+    static const char *const d3[] = {"0°", "22.5°", "45°", "67.5°", "90°", "112.5°", "135°", "157.5°",
+                                     "180°", "202.5°", "225°", "247.5°", "270°", "292.5°", "315°", "337.5°"};
+    static const char *const d4[] = {"0.25倍", "0.5倍", "0.75倍", "1倍", "2倍", "3倍", "5倍", "10倍",
+                                     "20倍", "30倍", "40倍", "50倍", "70倍", "100倍", "150倍", "200倍"};
+    static const char *const d5[] = {"0.5m以下", "0.5-1.0m", "1.0-1.5m", "1.5-2.0m", "2.0-3.0m", "3.0-5.0m",
+                                     "5.0-10.0m", "10.0m超"};
+    static const char *const d6[] = {"-30°C以下", "-30〜-25°C", "-25〜-20°C", "-20〜-15°C", "-15〜-10°C", "-10〜-5°C",
+                                     "-5〜0°C", "0〜5°C", "5〜10°C", "10〜15°C", "15〜20°C", "20〜25°C", "25〜30°C",
+                                     "30〜35°C", "35〜45°C", "45°C超"};
+    static const char *const d7[] = {"ハリケーン1級(120-150km/h)", "ハリケーン2級(150-180km/h)", "ハリケーン3級(180-210km/h)",
+                                     "ハリケーン4級(210-250km/h)", "ハリケーン5級(250km/h以上)"};
+    static const char *const d8[] = {"風力0・静穏(<1km/h)", "風力1・至軽風(1-5km/h)", "風力2・軽風(6-11km/h)",
+                                     "風力3・軟風(12-19km/h)", "風力4・和風(20-30km/h)", "風力5・疾風(31-39km/h)",
+                                     "風力6・雄風(40-50km/h)", "風力7・強風(51-61km/h)", "風力8・疾強風(62-74km/h)",
+                                     "風力9・大強風(75-88km/h)", "風力10・全強風(89-102km/h)", "風力11・暴風(103-117km/h)",
+                                     "風力12・台風(118km/h超)"};
+    static const char *const d9[] = {"2.5mm/h以下", "2.5-7.5mm/h", "7.5-10mm/h", "10-20mm/h", "20-30mm/h", "30-50mm/h",
+                                     "50-80mm/h", "80mm/h超"};
+    static const char *const d10[] = {"被害分類1(規模1・強度1)", "被害分類2(規模1・強度2)", "被害分類3(規模1・強度3)",
+                                      "被害分類4(規模2・強度1)", "被害分類5(規模2・強度2)", "被害分類5(規模3・強度3)"};
+    static const char *const d11[] = {"竜巻の脅威なし", "非常に低い(2-4%)", "低い(5-14%)", "中程度(15-29%)", "高い(30-44%)",
+                                      "極めて高い(45%以上)"};
+    static const char *const d12[] = {"H0・硬い雹(約5mm)", "H1・植物に軽微な被害(5-15mm)", "H2・農作物に被害(10-20mm)",
+                                      "H3・窓や構造物に被害(20-30mm)", "H4・広範囲の窓・車両に被害(25-40mm)",
+                                      "H5・ガラス破損・負傷のおそれ(30-50mm)", "H6・航空機や壁面に被害(40-60mm)",
+                                      "H7・屋根損傷・重傷のおそれ(50-75mm)", "H8・航空機に重大な被害(60-90mm)",
+                                      "H9・甚大な構造被害(75-100mm)", "H10・甚大な構造被害(100mm超)"};
+    static const char *const d13[] = {"濃霧・視程20m未満", "濃い霧・20-200m", "中程度の霧・200-500m", "薄い霧・500-1000m",
+                                      "もや・1-2km", "煙霧・2-4km", "薄い煙霧・4-10km", "快晴・10-20km",
+                                      "非常に良好・20-50km", "極めて良好・50km超"};
+    static const char *const d14[] = {"20cm以下/日", "20-40cm/日", "40-60cm/日", "60-80cm/日", "80-100cm/日", "100-120cm/日",
+                                      "120-140cm/日", "140-160cm/日", "160-180cm/日", "180-200cm/日", "200-220cm/日",
+                                      "220-240cm/日", "240-260cm/日", "260-280cm/日", "280-300cm/日", "300-320cm/日",
+                                      "320-340cm/日", "340-360cm/日", "360-380cm/日", "380-400cm/日", "400-420cm/日",
+                                      "420-440cm/日", "440-460cm/日", "460-480cm/日", "480-500cm/日", "500-520cm/日",
+                                      "520-540cm/日", "540-560cm/日", "560-580cm/日", "580-600cm/日", "600cm超/日"};
+    static const char *const d15[] = {"小規模浸水・被害軽微", "中規模浸水・一部避難", "大規模浸水・広域避難", "記録的な洪水"};
+    static const char *const d16[] = {"雷雨なし", "孤立した雷雨", "散発的な雷雨", "広範囲の雷雨", "多数の雷雨", "雨を伴わない雷"};
+    static const char *const d17[] = {"霧レベル1/5・薄い霧", "霧レベル2/5・やや濃い", "霧レベル3/5・交通に支障",
+                                      "霧レベル4/5・交通規制", "霧レベル5/5・濃霧"};
+    static const char *const d18[] = {"D1・中程度の干ばつ", "D2・深刻な干ばつ", "D3・極端な干ばつ", "D4・例外的な干ばつ"};
+    static const char *const d19[] = {"雪崩危険度1・低", "雪崩危険度2・中", "雪崩危険度3・かなり高い", "雪崩危険度4・高い",
+                                      "雪崩危険度5・非常に高い"};
+    static const char *const d20[] = {"降灰1mm未満", "降灰1-5mm", "降灰5-100mm", "降灰100-300mm", "降灰300mm超"};
+    static const char *const d21[] = {"G1・地磁気嵐/弱", "G2・中程度", "G3・強い", "G4・非常に強い", "G5・極端に強い"};
+    static const char *const d22[] = {"テロ脅威・非常に低い", "テロ脅威・低い", "テロ脅威・中程度", "テロ脅威・高い", "テロ脅威・危機的"};
+    static const char *const d23[] = {"火災危険度1/5・低い", "火災危険度2/5・中程度", "火災危険度3/5・かなり高い",
+                                      "火災危険度4/5・高い", "火災危険度5/5・非常に高い"};
+    static const char *const d24[] = {"水質・非常に良好", "水質・良好", "水質・不良", "水質・非常に不良", "飲用可能", "飲用不可"};
+    static const char *const d25[] = {"紫外線指数0-2・低い", "紫外線指数3/11・中程度", "紫外線指数4/11・中程度",
+                                      "紫外線指数5/11・高い", "紫外線指数6/11・高い", "紫外線指数7/11・高い",
+                                      "紫外線指数8/11・非常に高い", "紫外線指数9/11・非常に高い", "紫外線指数10/11・極端",
+                                      "紫外線指数11/11・極端"};
+    static const char *const d26[] = {"0-9人", "10-20人", "21-50人", "51-70人", "71-100人", "101-125人", "126-150人",
+                                      "151-175人", "176-200人", "201-250人", "251-300人", "301-350人", "351-400人", "401-450人",
+                                      "451-500人", "501-750人", "751-1000人", "1000人超", "2000人超", "3000人超", "5000人超"};
+    static const char *const d27[] = {"40-45dB", "45-50dB", "50-60dB", "60-70dB", "70-80dB・大きい", "80-90dB・非常に大きい",
+                                      "90-100dB・非常に大きい", "100-110dB・非常に大きい", "110-120dB・極めて大きい",
+                                      "120-130dB・極めて大きい", "130-140dB・痛みを感じる", "140dB超・痛みを感じる"};
+    static const char *const d28[] = {"大気質0-50・良好", "大気質51-100・普通", "大気質101-150・敏感な人に不健康",
+                                      "大気質151-200・不健康", "大気質201-300・非常に不健康", "大気質301-500・危険"};
+    static const char *const d29[] = {"30分未満", "30-45分", "45分-1時間", "1-1.5時間", "1.5-2時間", "2-3時間", "3-4時間",
+                                      "4-5時間", "5-10時間", "10-24時間", "1-2日", "2-7日", "7日以上"};
+    static const char *const d30[] = {"不明", "国際原子力事象評価尺度0・安全上の影響なし", "同尺度1・逸脱", "同尺度2・異常事象",
+                                      "同尺度3・重大な異常事象", "同尺度4・局所的影響を伴う事故", "同尺度5・広範な影響を伴う事故",
+                                      "同尺度6・大事故", "同尺度7・深刻な事故"};
+    static const char *const d31[] = {"爆発物", "可燃性ガス", "可燃性エアゾール", "支燃性ガス", "高圧ガス", "可燃性液体", "可燃性固体",
+                                      "自己反応性物質", "自然発火性液体", "自然発火性固体", "自己発熱性物質", "水反応性・可燃性ガス発生",
+                                      "酸化性液体", "酸化性固体", "有機過酸化物", "金属腐食性物質"};
+    static const char *const d32[] = {"バイオセーフティーレベル1", "バイオセーフティーレベル2", "バイオセーフティーレベル3",
+                                      "バイオセーフティーレベル4"};
+    static const char *const d33[] = {"生物病原体", "生物毒素", "血液・血液製剤", "環境試料"};
+    static const char *const d34[] = {"PE1・大量爆発のおそれ", "PE2・飛散物の重大な危険", "PE3・火災・爆風・飛散の危険",
+                                      "PE4・局所的な火災・爆発のおそれ"};
+    static const char *const d35[] = {"炭疽", "ヒト鳥インフルエンザ", "ボツリヌス症", "ブルセラ症", "カンピロバクター症", "チクングニア熱",
+                                      "クラミジア感染症", "コレラ", "新型コロナウイルス感染症", "変異型クロイツフェルト・ヤコブ病", "クリプトスポリジウム症",
+                                      "デング熱", "ジフテリア", "エキノコックス症", "ジアルジア症", "淋菌感染症", "A型肝炎", "B型肝炎", "C型肝炎",
+                                      "HIV感染症・後天性免疫不全症候群", "インフルエンザ菌b型感染症", "インフルエンザ", "侵襲性髄膜炎菌感染症", "侵襲性肺炎球菌感染症",
+                                      "レジオネラ症", "レプトスピラ症", "リステリア症", "ライム神経ボレリア症", "マラリア", "麻疹", "侵襲性髄膜炎菌感染症",
+                                      "流行性耳下腺炎", "百日咳", "ペスト", "侵襲性肺炎球菌感染症", "ポリオ", "Q熱", "狂犬病", "風疹", "先天性風疹",
+                                      "サルモネラ症", "重症急性呼吸器症候群", "志賀毒素産生性大腸菌感染症", "細菌性赤痢", "天然痘", "梅毒", "先天性梅毒", "破傷風",
+                                      "ダニ媒介性脳炎", "先天性トキソプラズマ症", "旋毛虫症", "結核", "野兎病", "腸チフス・パラチフス", "ウイルス性出血熱",
+                                      "ウエストナイル熱", "黄熱", "エルシニア症", "ジカウイルス感染症", "先天性ジカウイルス感染症", "院内感染症", "薬剤耐性菌感染症", "原因不明の感染症"};
+    static const char *const d36[] = {"台風規模1・強度1", "台風規模1・強度2", "台風規模1・強度3", "台風規模2・強度1", "台風規模2・強度2"};
+    switch (field) {
+    case 1: return dcxDetailTableText(d1, code);
+    case 2: return dcxDetailTableText(d2, code);
+    case 3: return dcxDetailTableText(d3, code);
+    case 4: return dcxDetailTableText(d4, code);
+    case 5: return dcxDetailTableText(d5, code);
+    case 6: return dcxDetailTableText(d6, code);
+    case 7: return dcxDetailTableText(d7, code);
+    case 8: return dcxDetailTableText(d8, code);
+    case 9: return dcxDetailTableText(d9, code);
+    case 10: return dcxDetailTableText(d10, code);
+    case 11: return dcxDetailTableText(d11, code);
+    case 12: return dcxDetailTableText(d12, code);
+    case 13: return dcxDetailTableText(d13, code);
+    case 14: return dcxDetailTableText(d14, code);
+    case 15: return dcxDetailTableText(d15, code);
+    case 16: return dcxDetailTableText(d16, code);
+    case 17: return dcxDetailTableText(d17, code);
+    case 18: return dcxDetailTableText(d18, code);
+    case 19: return dcxDetailTableText(d19, code);
+    case 20: return dcxDetailTableText(d20, code);
+    case 21: return dcxDetailTableText(d21, code);
+    case 22: return dcxDetailTableText(d22, code);
+    case 23: return dcxDetailTableText(d23, code);
+    case 24: return dcxDetailTableText(d24, code);
+    case 25: return dcxDetailTableText(d25, code);
+    case 26: return dcxDetailTableText(d26, code);
+    case 27: return dcxDetailTableText(d27, code);
+    case 28: return dcxDetailTableText(d28, code);
+    case 29: return dcxDetailTableText(d29, code);
+    case 30: return dcxDetailTableText(d30, code);
+    case 31: return dcxDetailTableText(d31, code);
+    case 32: return dcxDetailTableText(d32, code);
+    case 33: return dcxDetailTableText(d33, code);
+    case 34: return dcxDetailTableText(d34, code);
+    case 35: return dcxDetailTableText(d35, code);
+    case 36: return dcxDetailTableText(d36, code);
+    default: return "未対応項目";
+    }
 }
 
 const char *dcxSeverityText(uint32_t severity)
@@ -754,7 +930,7 @@ const char *dcrInformationTypeText(uint32_t hazard, uint32_t infoType)
     return infoType < 3 ? (infoType == 0 ? "発表" : infoType == 1 ? "訂正" : "取消") : "未定義";
 }
 
-constexpr uint8_t MAX_DECODED_QZSS_MESSAGES = 12;
+constexpr uint8_t MAX_DECODED_QZSS_MESSAGES = 16;
 
 struct DecodedQzssMessages {
     char text[MAX_DECODED_QZSS_MESSAGES][meshtastic_Constants_DATA_PAYLOAD_LEN];
@@ -769,7 +945,7 @@ void initDecodedQzssMessages(DecodedQzssMessages &messages, const char *title)
     messages.text[0][0] = '\0';
     size_t position = 0;
     if (appendDcxText(messages.text[0], sizeof(messages.text[0]), position, title) && position + 1 < sizeof(messages.text[0])) {
-        messages.text[0][position++] = '\n';
+        messages.text[0][position++] = '/';
         messages.text[0][position] = '\0';
     }
     messages.length[0] = static_cast<uint16_t>(position);
@@ -789,13 +965,13 @@ bool appendDecodedQzssLine(DecodedQzssMessages &messages, const char *line)
         messages.length[index] = 0;
         messages.text[index][0] = '\0';
         size_t nextPosition = 0;
-        if (!appendDcxText(messages.text[index], capacity, nextPosition, "（続き）\n"))
+        if (!appendDcxText(messages.text[index], capacity, nextPosition, "（続き）/"))
             return false;
         messages.length[index] = static_cast<uint16_t>(nextPosition);
     }
     const size_t position = messages.length[index];
     std::memcpy(messages.text[index] + position, line, length);
-    messages.text[index][position + length] = '\n';
+    messages.text[index][position + length] = '/';
     messages.text[index][position + length + 1] = '\0';
     messages.length[index] = static_cast<uint16_t>(position + length + 1);
     return true;
@@ -810,12 +986,11 @@ bool appendDecodedQzssNumber(DecodedQzssMessages &messages, const char *name, ui
 
 bool appendDecodedQzssValue(DecodedQzssMessages &messages, const char *name, uint64_t value, const char *meaning)
 {
-    char line[144];
-    if (meaning)
-        std::snprintf(line, sizeof(line), "%s=%llu(%s)", name, static_cast<unsigned long long>(value), meaning);
-    else
-        std::snprintf(line, sizeof(line), "%s=%llu", name, static_cast<unsigned long long>(value));
-    return appendDecodedQzssLine(messages, line);
+    char line[meshtastic_Constants_DATA_PAYLOAD_LEN];
+    const int length = meaning ? std::snprintf(line, sizeof(line), "%s=%llu(%s)", name,
+                                               static_cast<unsigned long long>(value), meaning)
+                               : std::snprintf(line, sizeof(line), "%s=%llu", name, static_cast<unsigned long long>(value));
+    return length >= 0 && static_cast<size_t>(length) < sizeof(line) && appendDecodedQzssLine(messages, line);
 }
 
 bool appendDecodedQzssFixed(DecodedQzssMessages &messages, const char *name, int32_t scaledValue, uint8_t decimals,
@@ -848,6 +1023,13 @@ bool appendDecodedQzssHex64(DecodedQzssMessages &messages, const char *name, uin
     return appendDecodedQzssLine(messages, line);
 }
 
+bool appendDcrCodeValue(DecodedQzssMessages &messages, const char *name, uint64_t value, QzssDcrCodeTables::Id table)
+{
+    char scratch[192];
+    const char *meaning = QzssDcrCodeTables::lookup(table, value, scratch, sizeof(scratch));
+    return appendDecodedQzssValue(messages, name, value, meaning ? meaning : "未定義コード");
+}
+
 bool appendDecodedQzssBits(DecodedQzssMessages &messages, const uint8_t *frame, const char *name, uint16_t firstBit,
                             uint8_t bitCount)
 {
@@ -862,16 +1044,109 @@ bool appendDecodedQzssBits(DecodedQzssMessages &messages, const uint8_t *frame, 
 }
 
 bool appendDcrArrayValues(DecodedQzssMessages &messages, const uint8_t *frame, const char *name, uint16_t firstBit,
-                         uint8_t stride, uint8_t fieldOffset, uint8_t width, uint8_t count)
+                         uint8_t stride, uint8_t fieldOffset, uint8_t width, uint8_t count,
+                         QzssDcrCodeTables::Id table = QzssDcrCodeTables::Id::None, uint8_t recordWidth = 0)
 {
-    char line[meshtastic_Constants_DATA_PAYLOAD_LEN];
-    size_t position = static_cast<size_t>(std::snprintf(line, sizeof(line), "%s=", name));
+    constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
+    char line[capacity];
+    int prefix = std::snprintf(line, sizeof(line), "%s=", name);
+    if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
+        return false;
+    size_t position = static_cast<size_t>(prefix);
+    bool hasValues = false;
     for (uint8_t i = 0; i < count; ++i) {
-        const int written = std::snprintf(line + position, sizeof(line) - position, "%s%llu", i ? "," : "",
-                                          static_cast<unsigned long long>(getBits64(frame, firstBit + i * stride + fieldOffset, width)));
-        if (written < 0 || static_cast<size_t>(written) >= sizeof(line) - position)
+        const uint16_t recordBit = firstBit + i * stride;
+        if (recordWidth && getBits64(frame, recordBit, recordWidth) == 0)
+            break;
+
+        const uint64_t value = getBits64(frame, recordBit + fieldOffset, width);
+        char meaningBuffer[192];
+        const char *meaning =
+            table == QzssDcrCodeTables::Id::None ? nullptr : QzssDcrCodeTables::lookup(table, value, meaningBuffer,
+                                                                                       sizeof(meaningBuffer));
+        char valueText[capacity];
+        const int valueLength = meaning
+                                    ? std::snprintf(valueText, sizeof(valueText), "%llu(%s)",
+                                                   static_cast<unsigned long long>(value), meaning)
+                                    : table == QzssDcrCodeTables::Id::None
+                                          ? std::snprintf(valueText, sizeof(valueText), "%llu",
+                                                          static_cast<unsigned long long>(value))
+                                          : std::snprintf(valueText, sizeof(valueText), "%llu(未定義コード)",
+                                                          static_cast<unsigned long long>(value));
+        if (valueLength < 0 || static_cast<size_t>(valueLength) >= sizeof(valueText))
             return false;
-        position += static_cast<size_t>(written);
+        size_t length = static_cast<size_t>(valueLength);
+        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line)) {
+            line[position] = '\0';
+            if (!appendDecodedQzssLine(messages, line))
+                return false;
+            prefix = std::snprintf(line, sizeof(line), "%s(続き)=", name);
+            if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
+                return false;
+            position = static_cast<size_t>(prefix);
+            hasValues = false;
+        }
+        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line))
+            return false;
+        if (hasValues)
+            line[position++] = ',';
+        std::memcpy(line + position, valueText, length);
+        position += length;
+        line[position] = '\0';
+        hasValues = true;
+    }
+    if (!hasValues) {
+        std::snprintf(line, sizeof(line), "%s=なし", name);
+        return appendDecodedQzssLine(messages, line);
+    }
+    return appendDecodedQzssLine(messages, line);
+}
+
+bool appendDcrBitmapRegions(DecodedQzssMessages &messages, const uint8_t *frame, const char *name,
+                            uint16_t firstBit, uint8_t bitCount)
+{
+    constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
+    char line[capacity];
+    int prefix = std::snprintf(line, sizeof(line), "%s=", name);
+    if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
+        return false;
+    size_t position = static_cast<size_t>(prefix);
+    bool hasValues = false;
+    for (uint8_t i = 0; i < bitCount; ++i) {
+        if (!getBit(frame, firstBit + i))
+            continue;
+        const uint32_t region = i + 1;
+        char scratch[64];
+        const char *meaning = QzssDcrCodeTables::lookup(QzssDcrCodeTables::Id::EewForecastRegion, region, scratch,
+                                                         sizeof(scratch));
+        char value[96];
+        const int valueLength = meaning ? std::snprintf(value, sizeof(value), "%u(%s)", region, meaning)
+                                        : std::snprintf(value, sizeof(value), "%u(未定義地域)", region);
+        if (valueLength < 0 || static_cast<size_t>(valueLength) >= sizeof(value))
+            return false;
+        const size_t length = static_cast<size_t>(valueLength);
+        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line)) {
+            line[position] = '\0';
+            if (!appendDecodedQzssLine(messages, line))
+                return false;
+            prefix = std::snprintf(line, sizeof(line), "%s(続き)=", name);
+            if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
+                return false;
+            position = static_cast<size_t>(prefix);
+            hasValues = false;
+        }
+        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line))
+            return false;
+        if (hasValues)
+            line[position++] = ',';
+        std::memcpy(line + position, value, length);
+        position += length;
+        line[position] = '\0';
+        hasValues = true;
+    }
+    if (!hasValues) {
+        std::snprintf(line, sizeof(line), "%s=なし", name);
+        return appendDecodedQzssLine(messages, line);
     }
     return appendDecodedQzssLine(messages, line);
 }
@@ -889,60 +1164,10 @@ bool appendDcrTimeFields(DecodedQzssMessages &messages, const uint8_t *frame, co
     return appendDecodedQzssNumber(messages, name, getBits(frame, firstBit + 10, 6));
 }
 
-const char *dcrTyphoonScaleText(uint32_t code)
+const char *dcrActivityTimeAmbiguityText(uint32_t code)
 {
-    switch (code) {
-    case 0:
-        return "なし";
-    case 1:
-        return "大型";
-    case 2:
-        return "超大型";
-    case 15:
-        return "その他の大きさ階級分類";
-    default:
-        return nullptr;
-    }
-}
-
-const char *dcrTyphoonIntensityText(uint32_t code)
-{
-    switch (code) {
-    case 0:
-        return "なし";
-    case 1:
-        return "強い";
-    case 2:
-        return "非常に強い";
-    case 3:
-        return "猛烈な";
-    case 15:
-        return "その他の強さ階級分類";
-    default:
-        return nullptr;
-    }
-}
-
-const char *dcrNankaiSerialText(uint32_t code)
-{
-    switch (code) {
-    case 1:
-        return "調査中A";
-    case 2:
-        return "調査中B";
-    case 3:
-        return "調査中C";
-    case 4:
-        return "巨大地震警戒";
-    case 5:
-        return "巨大地震注意";
-    case 6:
-        return "調査終了";
-    case 15:
-        return "その他";
-    default:
-        return "未定義";
-    }
+    static const char *const meanings[] = {"なし", "1分", "1秒", "10分", "1時間", "1日", "1か月", "1年"};
+    return code < sizeof(meanings) / sizeof(meanings[0]) ? meanings[code] : nullptr;
 }
 
 bool appendDcrNankaiText(DecodedQzssMessages &messages, const uint8_t *frame)
@@ -959,7 +1184,7 @@ bool appendDcrNankaiText(DecodedQzssMessages &messages, const uint8_t *frame)
         if (character == '\0')
             break;
         if (character == '\r' || character == '\n')
-            character = ' ';
+            character = '/';
     }
 
     char line[128];
@@ -1022,14 +1247,16 @@ bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, 
         return false;
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
         char timeText[40];
-        std::snprintf(timeText, sizeof(timeText), "発表時刻=%02u/%02u %02u:%02u UTC", month, day, hour, minute);
+        std::snprintf(timeText, sizeof(timeText), "発表時刻=%02u/%02u %02u:%02u 協定世界時", month, day, hour, minute);
         if (!appendDecodedQzssLine(messages, timeText))
             return false;
     }
     if (hazard == 1) {
         return appendDecodedQzssNumber(messages, "Spare1/予約", getBits(frame, 43, 4)) &&
-               appendDecodedQzssNumber(messages, "LgLl/長周期地震動下限コード", getBits(frame, 47, 3)) &&
-               appendDecodedQzssNumber(messages, "LgUl/長周期地震動上限コード", getBits(frame, 50, 3));
+               appendDcrCodeValue(messages, "LgLl/長周期地震動下限", getBits(frame, 47, 3),
+                                  QzssDcrCodeTables::Id::LongPeriodGroundMotionLowerLimit) &&
+               appendDcrCodeValue(messages, "LgUl/長周期地震動上限", getBits(frame, 50, 3),
+                                  QzssDcrCodeTables::Id::LongPeriodGroundMotionUpperLimit);
     }
     return appendDecodedQzssNumber(messages, "Spare1/予約", getBits(frame, 43, hazard == 8 ? 7 : 10));
 }
@@ -1041,16 +1268,23 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
     case 1: {
         for (unsigned i = 0; i < 3; ++i) {
             std::snprintf(label, sizeof(label), "Co%u/防災情報コード", i + 1);
-            if (!appendDecodedQzssNumber(messages, label, getBits(frame, 53 + i * 9, 9)))
+            if (!appendDcrCodeValue(messages, label, getBits(frame, 53 + i * 9, 9),
+                                    QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
                 return false;
         }
         if (!appendDcrTimeFields(messages, frame, "Ot/地震発生時刻", 80) ||
-            !appendDecodedQzssNumber(messages, "De/震源深さkm", getBits(frame, 96, 9)) ||
-            !appendDecodedQzssNumber(messages, "Ma/マグニチュード0.1単位", getBits(frame, 105, 7)) ||
-            !appendDecodedQzssNumber(messages, "Ep/震央コード", getBits(frame, 112, 10)) ||
-            !appendDecodedQzssNumber(messages, "Ll/地域コード", getBits(frame, 122, 4)) ||
-            !appendDecodedQzssNumber(messages, "Ul/上限震度コード", getBits(frame, 126, 4)) ||
+            !appendDcrCodeValue(messages, "De/震源深さ", getBits(frame, 96, 9),
+                                QzssDcrCodeTables::Id::DepthOfHypocenter) ||
+            !appendDcrCodeValue(messages, "Ma/マグニチュード", getBits(frame, 105, 7),
+                                QzssDcrCodeTables::Id::EewMagnitude) ||
+            !appendDcrCodeValue(messages, "Ep/震央・震源", getBits(frame, 112, 10),
+                                QzssDcrCodeTables::Id::EpicenterAndHypocenter) ||
+            !appendDcrCodeValue(messages, "Ll/震度下限", getBits(frame, 122, 4),
+                                QzssDcrCodeTables::Id::SeismicIntensityLowerLimit) ||
+            !appendDcrCodeValue(messages, "Ul/震度上限", getBits(frame, 126, 4),
+                                QzssDcrCodeTables::Id::SeismicIntensityUpperLimit) ||
             !appendDecodedQzssBits(messages, frame, "Pl1-80/予測地域ビットマップ", 130, 80) ||
+            !appendDcrBitmapRegions(messages, frame, "Pl/予測地域", 130, 80) ||
             !appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 210, 4)))
             return false;
         return true;
@@ -1058,25 +1292,32 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
     case 2:
         for (unsigned i = 0; i < 3; ++i) {
             std::snprintf(label, sizeof(label), "Co%u/防災情報コード", i + 1);
-            if (!appendDecodedQzssNumber(messages, label, getBits(frame, 53 + i * 9, 9)))
+            if (!appendDcrCodeValue(messages, label, getBits(frame, 53 + i * 9, 9),
+                                    QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
                 return false;
         }
         return appendDcrTimeFields(messages, frame, "Ot/地震発生時刻", 80) &&
-               appendDecodedQzssNumber(messages, "De/震源深さkm", getBits(frame, 96, 9)) &&
-               appendDecodedQzssNumber(messages, "Ma/マグニチュード0.1単位", getBits(frame, 105, 7)) &&
-               appendDecodedQzssNumber(messages, "Ep/震央コード", getBits(frame, 112, 10)) &&
+               appendDcrCodeValue(messages, "De/震源深さ", getBits(frame, 96, 9),
+                                  QzssDcrCodeTables::Id::DepthOfHypocenter) &&
+               appendDcrCodeValue(messages, "Ma/マグニチュード", getBits(frame, 105, 7),
+                                  QzssDcrCodeTables::Id::HypocenterMagnitude) &&
+               appendDcrCodeValue(messages, "Ep/震央・震源", getBits(frame, 112, 10),
+                                  QzssDcrCodeTables::Id::EpicenterAndHypocenter) &&
                appendDcrLatitudeLongitude(messages, frame, 122) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits64(frame, 163, 51));
     case 3:
         if (!appendDcrTimeFields(messages, frame, "Ot/地震発生時刻", 53))
             return false;
-        if (!appendDcrArrayValues(messages, frame, "Es1-16/震度", 69, 9, 0, 3, 16) ||
-            !appendDcrArrayValues(messages, frame, "Pl1-16/都道府県コード", 69, 9, 3, 6, 16))
+        if (!appendDcrArrayValues(messages, frame, "Es1-16/震度", 69, 9, 0, 3, 16,
+                                  QzssDcrCodeTables::Id::SeismicIntensity, 9) ||
+            !appendDcrArrayValues(messages, frame, "Pl1-16/都道府県", 69, 9, 3, 6, 16,
+                                  QzssDcrCodeTables::Id::Prefecture, 9))
             return false;
         return appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 213, 1));
     case 4: {
         const uint32_t serial = getBits(frame, 53, 4);
-        if (!appendDecodedQzssValue(messages, "Is/南海トラフ情報番号", serial, dcrNankaiSerialText(serial)) ||
+        if (!appendDcrCodeValue(messages, "Is/南海トラフ情報番号", serial,
+                                QzssDcrCodeTables::Id::InformationSerialCode) ||
             !appendDcrNankaiText(messages, frame))
             return false;
         return appendDecodedQzssNumber(messages, "Pn/ページ番号", getBits(frame, 201, 6)) &&
@@ -1086,77 +1327,107 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
     case 5:
         for (unsigned i = 0; i < 3; ++i) {
             std::snprintf(label, sizeof(label), "Co%u/防災情報コード", i + 1);
-            if (!appendDecodedQzssNumber(messages, label, getBits(frame, 53 + i * 9, 9)))
+            if (!appendDcrCodeValue(messages, label, getBits(frame, 53 + i * 9, 9),
+                                    QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
                 return false;
         }
-        if (!appendDecodedQzssNumber(messages, "Dw/津波警報コード", getBits(frame, 80, 4)))
+        if (!appendDcrCodeValue(messages, "Dw/津波警報", getBits(frame, 80, 4),
+                                QzssDcrCodeTables::Id::TsunamiWarningCode))
             return false;
-        return appendDcrArrayValues(messages, frame, "Ta1-5.D1/到達日", 84, 26, 0, 1, 5) &&
-               appendDcrArrayValues(messages, frame, "Ta1-5.H1/到達時", 84, 26, 1, 5, 5) &&
-               appendDcrArrayValues(messages, frame, "Ta1-5.M1/到達分", 84, 26, 6, 6, 5) &&
-               appendDcrArrayValues(messages, frame, "Th1-5/津波高さコード", 84, 26, 12, 4, 5) &&
-               appendDcrArrayValues(messages, frame, "Pl1-5/津波予報区", 84, 26, 16, 10, 5);
+        return appendDcrArrayValues(messages, frame, "Ta1-5.D1/到達日", 84, 26, 0, 1, 5,
+                                    QzssDcrCodeTables::Id::None, 26) &&
+               appendDcrArrayValues(messages, frame, "Ta1-5.H1/到達時", 84, 26, 1, 5, 5,
+                                    QzssDcrCodeTables::Id::None, 26) &&
+               appendDcrArrayValues(messages, frame, "Ta1-5.M1/到達分", 84, 26, 6, 6, 5,
+                                    QzssDcrCodeTables::Id::None, 26) &&
+               appendDcrArrayValues(messages, frame, "Th1-5/津波高さ", 84, 26, 12, 4, 5,
+                                    QzssDcrCodeTables::Id::TsunamiHeight, 26) &&
+               appendDcrArrayValues(messages, frame, "Pl1-5/津波予報区", 84, 26, 16, 10, 5,
+                                    QzssDcrCodeTables::Id::TsunamiForecastRegion, 26);
     case 6:
-        if (!appendDecodedQzssNumber(messages, "Tp/津波情報番号", getBits(frame, 53, 3)))
+        if (!appendDcrCodeValue(messages, "Tp/津波発生可能性", getBits(frame, 53, 3),
+                                QzssDcrCodeTables::Id::TsunamigenicPotential))
             return false;
-        return appendDcrArrayValues(messages, frame, "Ta1-5.D1/到達日", 56, 28, 0, 1, 5) &&
-               appendDcrArrayValues(messages, frame, "Ta1-5.H1/到達時", 56, 28, 1, 5, 5) &&
-               appendDcrArrayValues(messages, frame, "Ta1-5.M1/到達分", 56, 28, 6, 6, 5) &&
-               appendDcrArrayValues(messages, frame, "Th1-5/津波高さコード", 56, 28, 12, 9, 5) &&
-               appendDcrArrayValues(messages, frame, "Pl1-5/沿岸地域コード", 56, 28, 21, 7, 5) &&
+        return appendDcrArrayValues(messages, frame, "Ta1-5.D1/到達日", 56, 28, 0, 1, 5,
+                                    QzssDcrCodeTables::Id::None, 28) &&
+               appendDcrArrayValues(messages, frame, "Ta1-5.H1/到達時", 56, 28, 1, 5, 5,
+                                    QzssDcrCodeTables::Id::None, 28) &&
+               appendDcrArrayValues(messages, frame, "Ta1-5.M1/到達分", 56, 28, 6, 6, 5,
+                                    QzssDcrCodeTables::Id::None, 28) &&
+               appendDcrArrayValues(messages, frame, "Th1-5/津波高さ", 56, 28, 12, 9, 5,
+                                    QzssDcrCodeTables::Id::NorthwestPacificTsunamiHeight, 28) &&
+               appendDcrArrayValues(messages, frame, "Pl1-5/沿岸地域", 56, 28, 21, 7, 5,
+                                    QzssDcrCodeTables::Id::CoastalRegion, 28) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 196, 18));
     case 8:
-        if (!appendDecodedQzssNumber(messages, "Du/活動時刻の曖昧さ", getBits(frame, 50, 3)) ||
+        if (!appendDecodedQzssValue(messages, "Du/活動時刻の曖昧さ", getBits(frame, 50, 3),
+                                    dcrActivityTimeAmbiguityText(getBits(frame, 50, 3))) ||
             !appendDcrTimeFields(messages, frame, "Td/火山活動時刻", 53) ||
-            !appendDecodedQzssNumber(messages, "Dw/警報コード", getBits(frame, 69, 7)) ||
-            !appendDecodedQzssNumber(messages, "Vo/火山名コード", getBits(frame, 76, 12)))
+            !appendDcrCodeValue(messages, "Dw/火山警報", getBits(frame, 69, 7),
+                                QzssDcrCodeTables::Id::VolcanicWarningCode) ||
+            !appendDcrCodeValue(messages, "Vo/火山名", getBits(frame, 76, 12), QzssDcrCodeTables::Id::VolcanoName))
             return false;
-        return appendDcrArrayValues(messages, frame, "Pl1-5/対象地域コード", 88, 23, 0, 23, 5) &&
+        return appendDcrArrayValues(messages, frame, "Pl1-5/対象自治体", 88, 23, 0, 23, 5,
+                                    QzssDcrCodeTables::Id::LocalGovernment, 23) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 203, 11));
     case 9:
         if (!appendDcrTimeFields(messages, frame, "Td/火山活動時刻", 53) ||
-            !appendDecodedQzssNumber(messages, "Dw1/降灰情報種別", getBits(frame, 69, 2)) ||
-            !appendDecodedQzssNumber(messages, "Vo/火山名コード", getBits(frame, 71, 12)))
+            !appendDcrCodeValue(messages, "Dw1/降灰情報種別", getBits(frame, 69, 2),
+                                QzssDcrCodeTables::Id::AshFallWarningType) ||
+            !appendDcrCodeValue(messages, "Vo/火山名", getBits(frame, 71, 12), QzssDcrCodeTables::Id::VolcanoName))
             return false;
-        return appendDcrArrayValues(messages, frame, "Ho1-4/降灰予想時間", 83, 29, 0, 3, 4) &&
-               appendDcrArrayValues(messages, frame, "Dw2_1-4/警報コード", 83, 29, 3, 3, 4) &&
-               appendDcrArrayValues(messages, frame, "Pl1-4/対象地域コード", 83, 29, 6, 23, 4) &&
+        return appendDcrArrayValues(messages, frame, "Ho1-4/降灰予想時間", 83, 29, 0, 3, 4,
+                                    QzssDcrCodeTables::Id::ExpectedAshFallTime, 29) &&
+               appendDcrArrayValues(messages, frame, "Dw2_1-4/降灰警報", 83, 29, 3, 3, 4,
+                                    QzssDcrCodeTables::Id::AshFallWarningCode, 29) &&
+               appendDcrArrayValues(messages, frame, "Pl1-4/対象自治体", 83, 29, 6, 23, 4,
+                                    QzssDcrCodeTables::Id::LocalGovernment, 29) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 199, 15));
     case 10:
-        if (!appendDecodedQzssNumber(messages, "Ar/情報区分", getBits(frame, 53, 3)))
+        if (!appendDcrCodeValue(messages, "Ar/警報状態", getBits(frame, 53, 3),
+                                QzssDcrCodeTables::Id::WeatherWarningState))
             return false;
-        return appendDcrArrayValues(messages, frame, "Ww1-6/気象警報コード", 56, 24, 0, 5, 6) &&
-               appendDcrArrayValues(messages, frame, "Pl1-6/対象地域コード", 56, 24, 5, 19, 6) &&
+        return appendDcrArrayValues(messages, frame, "Ww1-6/気象警報", 56, 24, 0, 5, 6,
+                                    QzssDcrCodeTables::Id::WeatherRelatedDisasterSubCategory, 24) &&
+               appendDcrArrayValues(messages, frame, "Pl1-6/対象地域", 56, 24, 5, 19, 6,
+                                    QzssDcrCodeTables::Id::WeatherForecastRegion, 24) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 200, 14));
     case 11:
-        return appendDcrArrayValues(messages, frame, "Lv1-3/水位警報コード", 53, 44, 0, 4, 3) &&
-               appendDcrArrayValues(messages, frame, "Pl1-3/対象地域コード", 53, 44, 4, 40, 3) &&
+        return appendDcrArrayValues(messages, frame, "Lv1-3/水位警報", 53, 44, 0, 4, 3,
+                                    QzssDcrCodeTables::Id::FloodWarningLevel, 44) &&
+               appendDcrArrayValues(messages, frame, "Pl1-3/洪水予報区", 53, 44, 4, 40, 3,
+                                    QzssDcrCodeTables::Id::FloodForecastRegion, 44) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 185, 29));
     case 12: {
         const uint32_t referenceTimeType = getBits(frame, 69, 3);
-        const uint32_t scale = getBits(frame, 94, 4);
-        const uint32_t intensity = getBits(frame, 98, 4);
-        static const char *const referenceTimeTypes[] = {nullptr, "実況", "推定", "予報", nullptr, nullptr, nullptr, nullptr};
         return appendDcrTimeFields(messages, frame, "Bt/基点時刻", 53) &&
-               appendDecodedQzssValue(messages, "Dt/基点時刻分類", referenceTimeType,
-                                       referenceTimeTypes[referenceTimeType]) &&
+               appendDcrCodeValue(messages, "Dt/基点時刻分類", referenceTimeType,
+                                  QzssDcrCodeTables::Id::TyphoonReferenceTimeType) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 72, 8)) &&
-               appendDecodedQzssNumber(messages, "Du/基点時刻からの経過時間(h)", getBits(frame, 80, 7)) &&
-               appendDecodedQzssNumber(messages, "Tn/台風番号", getBits(frame, 87, 7)) &&
-               appendDecodedQzssValue(messages, "Sr/台風の大きさコード", scale, dcrTyphoonScaleText(scale)) &&
-               appendDecodedQzssValue(messages, "Ic/台風の強さコード", intensity, dcrTyphoonIntensityText(intensity)) &&
+               appendDcrCodeValue(messages, "Du/基点時刻からの経過", getBits(frame, 80, 7),
+                                  QzssDcrCodeTables::Id::TyphoonElapsedTimeFromReferenceTime) &&
+               appendDcrCodeValue(messages, "Tn/台風番号", getBits(frame, 87, 7), QzssDcrCodeTables::Id::TyphoonNumber) &&
+               appendDcrCodeValue(messages, "Sr/台風の大きさ", getBits(frame, 94, 4),
+                                  QzssDcrCodeTables::Id::TyphoonScaleCategory) &&
+               appendDcrCodeValue(messages, "Ic/台風の強さ", getBits(frame, 98, 4),
+                                  QzssDcrCodeTables::Id::TyphoonIntensityCategory) &&
                appendDcrLatitudeLongitude(messages, frame, 102) &&
-               appendDecodedQzssNumber(messages, "Pr/中心気圧", getBits(frame, 143, 11)) &&
-               appendDecodedQzssNumber(messages, "W1/最大風速", getBits(frame, 154, 7)) &&
-               appendDecodedQzssNumber(messages, "W2/最大瞬間風速", getBits(frame, 161, 7)) &&
+               appendDcrCodeValue(messages, "Pr/中心気圧", getBits(frame, 143, 11),
+                                  QzssDcrCodeTables::Id::TyphoonCentralPressure) &&
+               appendDcrCodeValue(messages, "W1/最大風速", getBits(frame, 154, 7),
+                                  QzssDcrCodeTables::Id::TyphoonMaximumWindSpeed) &&
+               appendDcrCodeValue(messages, "W2/最大瞬間風速", getBits(frame, 161, 7),
+                                  QzssDcrCodeTables::Id::TyphoonMaximumGustWindSpeed) &&
                appendDecodedQzssNumber(messages, "Spare3/予約", getBits64(frame, 168, 46));
     }
     case 14:
-        return appendDcrArrayValues(messages, frame, "Dw1-8/海上警報コード", 53, 19, 0, 5, 8) &&
-               appendDcrArrayValues(messages, frame, "Pl1-8/海域コード", 53, 19, 5, 14, 8) &&
+        return appendDcrArrayValues(messages, frame, "Dw1-8/海上警報", 53, 19, 0, 5, 8,
+                                    QzssDcrCodeTables::Id::MarineWarningCode, 19) &&
+               appendDcrArrayValues(messages, frame, "Pl1-8/海域", 53, 19, 5, 14, 8,
+                                    QzssDcrCodeTables::Id::MarineForecastRegion, 19) &&
                appendDecodedQzssNumber(messages, "Spare2/予約", getBits(frame, 205, 9));
     default:
-        return appendDecodedQzssBits(messages, frame, "未定義Dcデータ(bits53-213)", 53, 161);
+        return appendDecodedQzssBits(messages, frame, "未定義Dcデータ(53-213ビット)", 53, 161);
     }
 }
 
@@ -1252,9 +1523,9 @@ bool appendDcxTarget(const uint8_t *frame, uint32_t country, uint32_t provider, 
             for (uint8_t i = 0; i < 47; ++i)
                 count += getBits(frame, 147 + (46 - i), 1) != 0;
             if (count == 47)
-                return appendDcxText(message, capacity, position, "全国\n");
+                return appendDcxText(message, capacity, position, "全国/");
             if (count == 0)
-                return appendDcxText(message, capacity, position, "指定なし\n");
+                return appendDcxText(message, capacity, position, "指定なし/");
 
             uint8_t written = 0;
             for (uint8_t i = 0; i < 47 && written < 3; ++i) {
@@ -1273,7 +1544,7 @@ bool appendDcxTarget(const uint8_t *frame, uint32_t country, uint32_t provider, 
                     !appendDcxText(message, capacity, position, "都道府県"))
                     return false;
             }
-            return appendDcxText(message, capacity, position, "\n");
+            return appendDcxText(message, capacity, position, "/");
         }
 
         uint8_t written = 0;
@@ -1291,7 +1562,7 @@ bool appendDcxTarget(const uint8_t *frame, uint32_t country, uint32_t provider, 
                 return false;
             ++written;
         }
-        return appendDcxText(message, capacity, position, written ? "\n" : "指定なし\n");
+        return appendDcxText(message, capacity, position, written ? "/" : "指定なし/");
     }
 
     if (country != 111) {
@@ -1307,10 +1578,10 @@ bool appendDcxTarget(const uint8_t *frame, uint32_t country, uint32_t provider, 
         }
         const uint32_t ellipse = getBits(frame, 80, 16) | getBits(frame, 96, 17) | getBits(frame, 113, 5) |
                                  getBits(frame, 118, 5) | getBits(frame, 123, 6);
-        return appendDcxText(message, capacity, position, ellipse ? "・楕円範囲\n" : "・国・地域全域\n");
+        return appendDcxText(message, capacity, position, ellipse ? "・楕円範囲/" : "・国・地域全域/");
     }
     if (provider != 1 && provider != 4)
-        return appendDcxText(message, capacity, position, "地域形式は未対応\n");
+        return appendDcxText(message, capacity, position, "地域形式は未対応/");
 
     const uint32_t targetCode = getBits(frame, 146, 16);
     if (targetCode != 0) {
@@ -1326,7 +1597,7 @@ bool appendDcxTarget(const uint8_t *frame, uint32_t country, uint32_t provider, 
         if (!appendDcxText(message, capacity, position, ellipse ? "楕円範囲" : "指定なし"))
             return false;
     }
-    return appendDcxText(message, capacity, position, "\n");
+    return appendDcxText(message, capacity, position, "/");
 }
 
 bool formatDcxMessage(const uint8_t *frame, char *message, size_t capacity, size_t &position)
@@ -1344,7 +1615,7 @@ bool formatDcxMessage(const uint8_t *frame, char *message, size_t capacity, size
     position = 0;
     if (!appendDcxText(message, capacity, position, "みちびきDCX【") ||
         !appendDcxText(message, capacity, position, messageTypes[messageType]) ||
-        !appendDcxText(message, capacity, position, "】\n種別:"))
+        !appendDcxText(message, capacity, position, "】/種別:"))
         return false;
     const char *hazardText = dcxHazardText(hazard);
     if (hazardText) {
@@ -1357,7 +1628,7 @@ bool formatDcxMessage(const uint8_t *frame, char *message, size_t capacity, size
     if (messageType != 0 && (!appendDcxText(message, capacity, position, "・") ||
                              !appendDcxText(message, capacity, position, dcxSeverityText(severity))))
         return false;
-    if (!appendDcxText(message, capacity, position, "\n") ||
+    if (!appendDcxText(message, capacity, position, "/") ||
         !appendDcxTarget(frame, country, provider, message, capacity, position))
         return false;
 
@@ -1366,10 +1637,17 @@ bool formatDcxMessage(const uint8_t *frame, char *message, size_t capacity, size
         if (!formatDcxInstruction(instruction, instructionText, sizeof(instructionText)))
             return false;
     } else if (library == 0) {
-        std::snprintf(instructionText, sizeof(instructionText), "国際指示 IC-A-%02u / IC-B-%02u",
-                      static_cast<unsigned>((instruction >> 5) + 1), static_cast<unsigned>((instruction & 0x1F) + 1));
+        const uint32_t actionA = instruction >> 5;
+        const uint32_t actionB = instruction & 0x1F;
+        if (actionA == 0 && actionB == 0) {
+            instructionText[0] = '\0';
+        } else {
+            std::snprintf(instructionText, sizeof(instructionText), "行動指示A%02u:%s/B%02u:%s",
+                          static_cast<unsigned>(actionA + 1), dcxInternationalInstructionA(actionA),
+                          static_cast<unsigned>(actionB + 1), dcxInternationalInstructionB(actionB));
+        }
     } else {
-        std::snprintf(instructionText, sizeof(instructionText), "地域別行動指示コード=%u", static_cast<unsigned>(instruction));
+        std::snprintf(instructionText, sizeof(instructionText), "地域別行動指示=%u(未対応)", static_cast<unsigned>(instruction));
     }
     if (instructionText[0] && !appendDcxText(message, capacity, position, instructionText))
         return false;
@@ -1428,15 +1706,15 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
         const uint32_t instruction = getBits(frame, 141, 5);
         char shiftText[16];
         char factorText[24];
-        char instructionText[24];
+        char instructionText[96];
         std::snprintf(shiftText, sizeof(shiftText), "%u/4長半径", static_cast<unsigned>(shift));
         std::snprintf(factorText, sizeof(factorText), "%s倍", homotheticFactors[factor]);
-        std::snprintf(instructionText, sizeof(instructionText), "IC-C-%02u", static_cast<unsigned>(instruction + 1));
+        std::snprintf(instructionText, sizeof(instructionText), "%s", dcxSecondEllipseInstruction(instruction));
         return appendDecodedQzssValue(messages, "C7/第2楕円中心シフト", shift, shiftText) &&
                appendDecodedQzssValue(messages, "C8/第2楕円軸倍率", factor, factorText) &&
                appendDecodedQzssNumber(messages, "C9/第2楕円方位コード", bearing) &&
                appendDecodedQzssFixed(messages, "C9/第2楕円方位", static_cast<int32_t>(bearing * 1125), 2, "°") &&
-               appendDecodedQzssValue(messages, "C10/第2楕円行動指示", instruction, instructionText);
+               appendDecodedQzssValue(messages, "C10/第2楕円行動指示", instruction + 1, instructionText);
     }
 
     struct DcxB4Field {
@@ -1502,17 +1780,20 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
         }
     }
     if (!schema)
-        return appendDecodedQzssBits(messages, frame, "A18/B4詳細15bits", 131, 15);
+        return appendDecodedQzssBits(messages, frame, "A18/B4未対応詳細15ビット", 131, 15);
 
     uint16_t firstBit = 131;
     for (uint8_t i = 0; i < schema->count; ++i) {
         const DcxB4Field &field = schema->fields[i];
-        if (!appendDecodedQzssNumber(messages, field.name, getBits(frame, firstBit, field.width)))
+        const uint8_t fieldId = static_cast<uint8_t>((field.name[1] - '0') * (field.name[2] == '/' ? 1 : 10) +
+                                                     (field.name[2] == '/' ? 0 : field.name[2] - '0'));
+        const uint32_t value = getBits(frame, firstBit, field.width);
+        if (!appendDecodedQzssValue(messages, field.name, value, dcxHazardDetailText(fieldId, value)))
             return false;
         firstBit += field.width;
     }
     const uint8_t reservedBitCount = static_cast<uint8_t>(146 - firstBit);
-    return reservedBitCount == 0 || appendDecodedQzssBits(messages, frame, "A18/B4予約bits", firstBit, reservedBitCount);
+    return reservedBitCount == 0 || appendDecodedQzssBits(messages, frame, "A18/B4予約ビット", firstBit, reservedBitCount);
 }
 
 bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMessages &messages)
@@ -1523,16 +1804,16 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
 
     messages.count = 1;
     messages.length[0] = static_cast<uint16_t>(summaryLength);
-    if (messages.length[0] == 0 || messages.text[0][messages.length[0] - 1] != '\n') {
+    if (messages.length[0] == 0 || messages.text[0][messages.length[0] - 1] != '/') {
         if (messages.length[0] + 1 < sizeof(messages.text[0])) {
-            messages.text[0][messages.length[0]++] = '\n';
+            messages.text[0][messages.length[0]++] = '/';
             messages.text[0][messages.length[0]] = '\0';
         } else {
             messages.count = 2;
             messages.length[1] = 0;
             messages.text[1][0] = '\0';
             size_t position = 0;
-            if (!appendDcxText(messages.text[1], sizeof(messages.text[1]), position, "（続き）\n"))
+            if (!appendDcxText(messages.text[1], sizeof(messages.text[1]), position, "（続き）/"))
                 return false;
             messages.length[1] = static_cast<uint16_t>(position);
         }
@@ -1558,21 +1839,21 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
     static const char *const severities[] = {"不明", "中程度", "重大", "極めて重大"};
     static const char *const durations[] = {"不明", "6時間未満", "6-12時間", "12-24時間"};
     static const char *const specificSettings[] = {"B1 主楕円の高精度化", "B2 災害中心位置", "B3 第2楕円", "B4 災害詳細"};
-    static const char *const libraries[] = {"国際ライブラリ", "国・地域ライブラリ"};
+    static const char *const libraries[] = {"国際指示表", "国・地域指示表"};
     static const char *const weekdays[] = {"月", "火", "水", "木", "金", "土", "日"};
     const char *countryText = dcxCountryText(country);
     const char *providerText = dcxProviderText(country, provider);
     const bool japanJAlert = country == 111 && (provider == 2 || provider == 3);
     char a7Description[40];
     char libraryVersionText[12];
-    std::snprintf(libraryVersionText, sizeof(libraryVersionText), "#%u", static_cast<unsigned>(libraryVersion + 1));
+    std::snprintf(libraryVersionText, sizeof(libraryVersionText), "第%u版", static_cast<unsigned>(libraryVersion + 1));
     if (onsetTimeOfWeek == 0) {
         std::snprintf(a7Description, sizeof(a7Description), "未使用");
     } else if (onsetTimeOfWeek <= 10080) {
         const uint32_t minuteOfWeek = onsetTimeOfWeek - 1;
         const uint32_t weekday = minuteOfWeek / 1440;
         const uint32_t minuteOfDay = minuteOfWeek % 1440;
-        std::snprintf(a7Description, sizeof(a7Description), "%s曜 %02u:%02u UTC", weekdays[weekday],
+        std::snprintf(a7Description, sizeof(a7Description), "%s曜 %02u:%02u 協定世界時", weekdays[weekday],
                       static_cast<unsigned>(minuteOfDay / 60), static_cast<unsigned>(minuteOfDay % 60));
     } else {
         std::snprintf(a7Description, sizeof(a7Description), "未使用コード");
@@ -1580,7 +1861,7 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
 
     if (!appendDecodedQzssHex(messages, "PAB", getBits(frame, 0, 8), 2) ||
         !appendDecodedQzssNumber(messages, "MT", getBits(frame, 8, 6)) ||
-        !appendDecodedQzssNumber(messages, "SD/衛星指定10bit", getBits(frame, 14, 10)) ||
+        !appendDecodedQzssNumber(messages, "SD/衛星指定10ビット", getBits(frame, 14, 10)) ||
         !appendDecodedQzssValue(messages, "SDMT/SDマスク種別", satelliteMaskType,
                                 satelliteMaskType ? "MT44送信状態" : "サービス種別") ||
         !appendDecodedQzssBits(messages, frame, "SDM/SV1-SV9", 15, 9) ||
@@ -1591,7 +1872,7 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
         !appendDecodedQzssValue(messages, "A4/災害種別", hazard, dcxHazardText(hazard)) ||
         !appendDecodedQzssValue(messages, "A5/重大度", severity, severities[severity]) ||
         !appendDecodedQzssValue(messages, "A6/発生週", onsetWeek, onsetWeek ? "次週" : "今週") ||
-        !appendDecodedQzssValue(messages, "A7/週内UTC分", onsetTimeOfWeek, a7Description) ||
+        !appendDecodedQzssValue(messages, "A7/週内時刻(協定世界時)", onsetTimeOfWeek, a7Description) ||
         !appendDecodedQzssValue(messages, "A8/継続時間", duration, durations[duration]) ||
         !appendDecodedQzssValue(messages, "A9/指示ライブラリ", library, libraries[library]) ||
         !appendDecodedQzssValue(messages, "A10/ライブラリ版", libraryVersion, libraryVersionText) ||
@@ -1615,10 +1896,15 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
                 return false;
         }
     } else if (library == 0) {
-        std::snprintf(line, sizeof(line), "A11/国際指示 ListA=IC-A-%02u ListB=IC-B-%02u",
-                      static_cast<unsigned>((instruction >> 5) + 1), static_cast<unsigned>((instruction & 0x1F) + 1));
-        if (!appendDecodedQzssLine(messages, line))
+        const uint32_t actionA = instruction >> 5;
+        const uint32_t actionB = instruction & 0x1F;
+        if (!appendDecodedQzssValue(messages, "A11/行動指示A", actionA + 1, dcxInternationalInstructionA(actionA)) ||
+            !appendDecodedQzssValue(messages, "A11/行動指示B", actionB + 1, dcxInternationalInstructionB(actionB)))
             return false;
+    } else if (!japanJAlert &&
+               (!appendDecodedQzssValue(messages, "A11/地域別行動指示", instruction, "地域別定義・未対応") ||
+                !appendDecodedQzssLine(messages, "行動指示の意味は未対応"))) {
+        return false;
     }
 
     if (!appendDecodedQzssNumber(messages, "A12/楕円中心緯度コード", getBits(frame, 80, 16)) ||
@@ -1669,7 +1955,7 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
         if (!appendDecodedQzssLine(messages, line))
             return false;
         if (provider == 1) {
-            if (!appendDecodedQzssBits(messages, frame, "EX2-EX7/L-Alertでは未使用bits", 162, 52))
+            if (!appendDecodedQzssBits(messages, frame, "EX2-EX7/Lアラート未使用ビット", 162, 52))
                 return false;
         } else {
             const uint32_t evacuateDirection = getBits(frame, 162, 1);
@@ -1702,15 +1988,15 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
     } else if (country == 111 && (provider == 2 || provider == 3)) {
         if (!appendDecodedQzssValue(messages, "EX8/対象地域コード種別", getBits(frame, 146, 1),
                                     getBits(frame, 146, 1) ? "市区町村" : "都道府県") ||
-            !appendDecodedQzssHex64(messages, "EX9/対象地域コード一覧64bit", getBits64(frame, 147, 64)) ||
+            !appendDecodedQzssHex64(messages, "EX9/対象地域コード一覧64ビット", getBits64(frame, 147, 64)) ||
             !appendDecodedQzssNumber(messages, "EX10/予約", getBits(frame, 211, 3)))
             return false;
-    } else if (!appendDecodedQzssBits(messages, frame, "EX11/国外組織固有情報68bit", 146, 68)) {
+    } else if (!appendDecodedQzssBits(messages, frame, "EX11/未対応の国外組織固有情報68ビット", 146, 68)) {
         return false;
     }
 
     return appendDecodedQzssNumber(messages, "Vn/仕様バージョン", getBits(frame, 214, 6)) &&
-           appendDecodedQzssNumber(messages, "Reserved/予約", getBits(frame, 220, 6)) &&
+           appendDecodedQzssNumber(messages, "予約", getBits(frame, 220, 6)) &&
            appendDecodedQzssHex(messages, "CRC24Q", getBits(frame, 226, 24), 6);
 }
 
