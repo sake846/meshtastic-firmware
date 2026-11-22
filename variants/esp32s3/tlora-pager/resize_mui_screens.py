@@ -775,9 +775,10 @@ font_width_patch = (
     + b"    lv_coord_t width = lv_txt_get_width(msg, strlen(msg), messageFont, 0);"
 )
 if b"const bool pagerQzssDcr" not in qzss_data:
-    if qzss_data.count(font_width_anchor) != 1:
+    if font_width_anchor in qzss_data:
+        qzss_data = qzss_data.replace(font_width_anchor, font_width_patch, 1)
+    elif b"MESHTASTIC_DEVICE_UI_JAPANESE_FONT" not in qzss_data:
         raise RuntimeError("unexpected message bubble font width calculation")
-    qzss_data = qzss_data.replace(font_width_anchor, font_width_patch, 1)
 font_style_anchor = b"    add_style_new_message_style(msgLabel);"
 font_style_patch = (
     font_style_anchor
@@ -786,7 +787,10 @@ font_style_patch = (
     + qzss_newline
     + b"        lv_obj_set_style_text_font(msgLabel, messageFont, LV_PART_MAIN | LV_STATE_DEFAULT);"
 )
-if b"lv_obj_set_style_text_font(msgLabel, messageFont" not in qzss_data:
+if (
+    b"const bool pagerQzssDcr" in qzss_data
+    and b"lv_obj_set_style_text_font(msgLabel, messageFont" not in qzss_data
+):
     if qzss_data.count(font_style_anchor) != 1:
         raise RuntimeError("unexpected message bubble style location")
     qzss_data = qzss_data.replace(font_style_anchor, font_style_patch, 1)
