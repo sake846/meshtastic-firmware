@@ -1234,10 +1234,16 @@ bool GPS::setup()
             delay(750);
 #if defined(HAS_QZSS_DCR)
             clearBuffer();
-            if (QzssDcr::isEnabled())
-                SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_QZSS_DCR_ENABLE, "enable QZSS L1S disaster reports", 500);
-            else
-                SEND_UBX_PACKET(0x06, 0x8A, _message_VALSET_QZSS_DCR_DISABLE, "disable QZSS L1S disaster reports", 500);
+            const bool qzssReceptionEnabled = QzssDcr::isEnabled();
+            const uint8_t *qzssSetting = qzssReceptionEnabled ? _message_VALSET_QZSS_DCR_ENABLE :
+                                                               _message_VALSET_QZSS_DCR_DISABLE;
+            msglen = makeUBXPacket(0x06, 0x8A, sizeof(_message_VALSET_QZSS_DCR_ENABLE), qzssSetting);
+            _serial_gps->write(UBXscratch, msglen);
+            if (getACK(0x06, 0x8A, 500) == GNSS_RESPONSE_OK) {
+                LOG_INFO("QZSS L1S/SFRBX/NAV-SAT config ACK: %s", qzssReceptionEnabled ? "enabled" : "disabled");
+            } else {
+                LOG_WARN("Failed to apply QZSS L1S/SFRBX/NAV-SAT receiver config");
+            }
             qzssDcrConfigPending.store(false);
             delay(750);
 #endif
@@ -1699,11 +1705,16 @@ int32_t GPS::runOnce()
 #if defined(HAS_QZSS_DCR)
     if (qzssDcrConfigPending.load() && gnssModel == GNSS_MODEL_UBLOX10 && didSerialInit && _serial_gps &&
         (powerState == GPS_ACTIVE || powerState == GPS_IDLE)) {
-        const uint8_t *setting = QzssDcr::isEnabled() ? _message_VALSET_QZSS_DCR_ENABLE : _message_VALSET_QZSS_DCR_DISABLE;
+        const bool qzssReceptionEnabled = QzssDcr::isEnabled();
+        const uint8_t *setting = qzssReceptionEnabled ? _message_VALSET_QZSS_DCR_ENABLE :
+                                                        _message_VALSET_QZSS_DCR_DISABLE;
         const uint8_t packetLength = makeUBXPacket(0x06, 0x8A, sizeof(_message_VALSET_QZSS_DCR_ENABLE), setting);
         _serial_gps->write(UBXscratch, packetLength);
-        if (getACK(0x06, 0x8A, 500) != GNSS_RESPONSE_OK)
+        if (getACK(0x06, 0x8A, 500) != GNSS_RESPONSE_OK) {
             LOG_WARN("Failed to update QZSS L1S receiver setting");
+        } else {
+            LOG_INFO("QZSS L1S/SFRBX/NAV-SAT config ACK: %s", qzssReceptionEnabled ? "enabled" : "disabled");
+        }
         qzssDcrConfigPending.store(false);
         return 750;
     }
