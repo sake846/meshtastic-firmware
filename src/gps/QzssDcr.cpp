@@ -964,26 +964,46 @@ void initDecodedQzssMessages(DecodedQzssMessages &messages, const char *title)
 bool appendDecodedQzssLine(DecodedQzssMessages &messages, const char *line)
 {
     constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
+    static constexpr char continuation[] = "（続き）/";
     size_t index = messages.count - 1;
-    size_t length = std::strlen(line);
-    if (length + 1 >= capacity)
-        return false;
-    if (messages.length[index] + length + 1 >= capacity) {
+    const size_t length = std::strlen(line);
+    if (messages.length[index] + length + 1 < capacity) {
+        size_t position = messages.length[index];
+        std::memcpy(messages.text[index] + position, line, length);
+        position += length;
+        messages.text[index][position++] = '/';
+        messages.text[index][position] = '\0';
+        messages.length[index] = static_cast<uint16_t>(position);
+        return true;
+    }
+
+    size_t offset = 0;
+    while (offset < length) {
         if (messages.count >= MAX_DECODED_QZSS_MESSAGES)
             return false;
         index = messages.count++;
-        messages.length[index] = 0;
-        messages.text[index][0] = '\0';
-        size_t nextPosition = 0;
-        if (!appendDcxText(messages.text[index], capacity, nextPosition, "（続き）/"))
-            return false;
-        messages.length[index] = static_cast<uint16_t>(nextPosition);
+        size_t position = sizeof(continuation) - 1;
+        std::memcpy(messages.text[index], continuation, position);
+        const size_t available = capacity - position - 1;
+        const size_t remaining = length - offset;
+        const bool completesLine = remaining < available;
+        size_t count = completesLine ? remaining : available;
+        if (!completesLine) {
+            if (count == remaining)
+                --count;
+            while (count > 0 && (static_cast<uint8_t>(line[offset + count]) & 0xC0) == 0x80)
+                --count;
+            if (!count)
+                return false;
+        }
+        std::memcpy(messages.text[index] + position, line + offset, count);
+        position += count;
+        offset += count;
+        if (completesLine)
+            messages.text[index][position++] = '/';
+        messages.text[index][position] = '\0';
+        messages.length[index] = static_cast<uint16_t>(position);
     }
-    const size_t position = messages.length[index];
-    std::memcpy(messages.text[index] + position, line, length);
-    messages.text[index][position + length] = '/';
-    messages.text[index][position + length + 1] = '\0';
-    messages.length[index] = static_cast<uint16_t>(position + length + 1);
     return true;
 }
 
