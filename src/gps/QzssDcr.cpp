@@ -24,6 +24,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <time.h>
 
 namespace QzssDcr
 {
@@ -1314,6 +1315,52 @@ bool appendDcrTimeFields(DecodedQzssMessages &messages, const uint8_t *frame, co
     return appendDecodedQzssNumber(messages, name, getBits(frame, firstBit + 10, 6));
 }
 
+bool formatDcrJstTime(unsigned month, unsigned day, unsigned hour, unsigned minute, char *output, size_t capacity)
+{
+    const time_t now = static_cast<time_t>(getValidTime(RTCQualityFromNet));
+    if (!now)
+        return false;
+    const struct tm *nowUtc = gmtime(&now);
+    if (!nowUtc)
+        return false;
+
+    const int currentYear = nowUtc->tm_year;
+    time_t reportEpoch = 0;
+    uint64_t closestDistance = UINT64_MAX;
+    // MT43 omits the year, so use the date closest to the device's current time.
+    for (int year = currentYear - 1; year <= currentYear + 1; ++year) {
+        struct tm reportUtc = {};
+        reportUtc.tm_year = year;
+        reportUtc.tm_mon = static_cast<int>(month) - 1;
+        reportUtc.tm_mday = static_cast<int>(day);
+        reportUtc.tm_hour = static_cast<int>(hour);
+        reportUtc.tm_min = static_cast<int>(minute);
+        const time_t candidate = gm_mktime(&reportUtc);
+        const struct tm *normalized = gmtime(&candidate);
+        if (!normalized || normalized->tm_year != year || normalized->tm_mon != static_cast<int>(month) - 1 ||
+            normalized->tm_mday != static_cast<int>(day))
+            continue;
+
+        const uint64_t distance =
+            candidate > now ? static_cast<uint64_t>(candidate - now) : static_cast<uint64_t>(now - candidate);
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            reportEpoch = candidate;
+        }
+    }
+    if (!reportEpoch)
+        return false;
+
+    const time_t jstEpoch = reportEpoch + 9 * SEC_PER_HOUR;
+    const struct tm *jst = gmtime(&jstEpoch);
+    if (!jst)
+        return false;
+
+    std::snprintf(output, capacity, "発表=%02d/%02d %02d:%02d JST", jst->tm_mon + 1, jst->tm_mday, jst->tm_hour,
+                  jst->tm_min);
+    return true;
+}
+
 const char *dcrActivityTimeAmbiguityText(uint32_t code)
 {
     static const char *const meanings[] = {"なし", "1分", "1秒", "10分", "1時間", "1日", "1か月", "1年"};
@@ -1365,41 +1412,27 @@ bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, 
     const uint32_t infoType = getBits(frame, 41, 2);
     const char *reportClassText = dcrReportClassText(reportClass);
     const char *hazardText = dcrHazardText(hazard);
-    char label[64];
 
     if (!appendDecodedQzssHex(messages, "先頭8ビット", getBits(frame, 0, 8), 2) ||
-        !appendDecodedQzssNumber(messages, "メッセージ種別", getBits(frame, 8, 6)) ||
-        !appendDecodedQzssNumber(messages, "衛星番号", satelliteId) ||
-        !appendDecodedQzssNumber(messages, "報告区分", reportClass) ||
-        !appendDecodedQzssNumber(messages, "災害種別", hazard) ||
-        !appendDecodedQzssNumber(messages, "情報種別", infoType))
-        return false;
-    if (reportClassText) {
-        std::snprintf(label, sizeof(label), "報告区分の意味=%s", reportClassText);
-        if (!appendDecodedQzssLine(messages, label))
-            return false;
-    }
-    if (hazardText) {
-        std::snprintf(label, sizeof(label), "災害種別の意味=%s", hazardText);
-        if (!appendDecodedQzssLine(messages, label))
-            return false;
-    }
-    std::snprintf(label, sizeof(label), "情報種別の意味=%s", dcrInformationTypeText(hazard, infoType));
-    if (!appendDecodedQzssLine(messages, label))
+        !appendDecodedQzssNumber(messages, "衛星", satelliteId) ||
+        !appendDecodedQzssValue(messages, "区分", reportClass, reportClassText) ||
+        !appendDecodedQzssValue(messages, "災害", hazard, hazardText) ||
+        !appendDecodedQzssValue(messages, "情報", infoType, dcrInformationTypeText(hazard, infoType)))
         return false;
 
     const unsigned month = static_cast<unsigned>((reportedAt >> 16) & 0x0F);
     const unsigned day = static_cast<unsigned>((reportedAt >> 11) & 0x1F);
     const unsigned hour = static_cast<unsigned>((reportedAt >> 6) & 0x1F);
     const unsigned minute = static_cast<unsigned>(reportedAt & 0x3F);
-    if (!appendDecodedQzssNumber(messages, "発表月", month) || !appendDecodedQzssNumber(messages, "発表日", day) ||
-        !appendDecodedQzssNumber(messages, "発表時", hour) || !appendDecodedQzssNumber(messages, "発表分", minute))
-        return false;
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
         char timeText[64];
-        std::snprintf(timeText, sizeof(timeText), "発表時刻=%02u/%02u %02u:%02u 協定世界時", month, day, hour, minute);
+        if (!formatDcrJstTime(month, day, hour, minute, timeText, sizeof(timeText)))
+            std::snprintf(timeText, sizeof(timeText), "発表=%02u/%02u %02u:%02u UTC", month, day, hour, minute);
         if (!appendDecodedQzssLine(messages, timeText))
             return false;
+    } else if (!appendDecodedQzssNumber(messages, "発表月", month) || !appendDecodedQzssNumber(messages, "発表日", day) ||
+               !appendDecodedQzssNumber(messages, "発表時", hour) || !appendDecodedQzssNumber(messages, "発表分", minute)) {
+        return false;
     }
     if (hazard == 1) {
         return appendDecodedQzssNumber(messages, "予約領域1", getBits(frame, 43, 4)) &&
@@ -1584,7 +1617,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
 bool formatDcrMessage(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMessages &messages)
 {
     const uint32_t hazard = getBits(frame, 17, 4);
-    initDecodedQzssMessages(messages, "みちびき災危通報（メッセージ種別43）");
+    initDecodedQzssMessages(messages, "みちびき災危通報 MT43");
     return appendDcrReportHeader(messages, frame, satelliteId, hazard) && appendDcrCategoryFields(messages, frame, hazard) &&
            appendDecodedQzssNumber(messages, "仕様バージョン", getBits(frame, 214, 6)) &&
            appendDecodedQzssNumber(messages, "予約領域", getBits(frame, 220, 6)) &&
@@ -1765,7 +1798,7 @@ bool formatDcxMessage(const uint8_t *frame, char *message, size_t capacity, size
     position = 0;
     if (!appendDcxText(message, capacity, position, "みちびきDCX【") ||
         !appendDcxText(message, capacity, position, messageTypes[messageType]) ||
-        !appendDcxText(message, capacity, position, "】/種別:"))
+        !appendDcxText(message, capacity, position, "】/災害:"))
         return false;
     const char *hazardText = dcxHazardText(hazard);
     if (hazardText) {
@@ -1816,21 +1849,21 @@ uint32_t dcxEllipseRadiusMilliKm(uint32_t code)
 bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard)
 {
     const uint32_t settingType = getBits(frame, 129, 2);
+    char label[64];
     if (settingType == 0) {
         static constexpr uint16_t centerRefinementMicroDegrees[] = {0, 343, 687, 1030, 1373, 1717, 2060, 2403};
         for (uint8_t i = 0; i < 2; ++i) {
-            const char *name = i == 0 ? "C1/緯度精密補正" : "C2/経度精密補正";
             const uint32_t value = getBits(frame, 131 + i * 3, 3);
-            if (!appendDecodedQzssNumber(messages, i == 0 ? "C1/緯度補正コード" : "C2/経度補正コード", value) ||
-                !appendDecodedQzssFixed(messages, name, centerRefinementMicroDegrees[value], 6, "°"))
+            std::snprintf(label, sizeof(label), "C%u/%s補正(コード=%u)", static_cast<unsigned>(i + 1),
+                          i == 0 ? "緯度" : "経度", static_cast<unsigned>(value));
+            if (!appendDecodedQzssFixed(messages, label, centerRefinementMicroDegrees[value], 6, "°"))
                 return false;
         }
         for (uint8_t i = 0; i < 2; ++i) {
             const uint32_t value = getBits(frame, 137 + i * 3, 3);
-            if (!appendDecodedQzssValue(messages, i == 0 ? "C3/長半径補間コード" : "C4/短半径補間コード", value,
-                                        nullptr) ||
-                !appendDecodedQzssFixed(messages, i == 0 ? "C3/長半径補間率" : "C4/短半径補間率",
-                                        static_cast<int32_t>(value * 125), 3, ""))
+            std::snprintf(label, sizeof(label), "C%u/%s補間率(コード=%u)", static_cast<unsigned>(i + 3),
+                          i == 0 ? "長半径" : "短半径", static_cast<unsigned>(value));
+            if (!appendDecodedQzssFixed(messages, label, static_cast<int32_t>(value * 125), 3, ""))
                 return false;
         }
         return appendDecodedQzssNumber(messages, "A18/B1予約", getBits(frame, 143, 3));
@@ -1841,10 +1874,11 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
         const uint32_t longitude = getBits(frame, 138, 7);
         const int32_t latitudeDelta = -1000000 + static_cast<int32_t>(latitude * 15625);
         const int32_t longitudeDelta = -1000000 + static_cast<int32_t>(longitude * 15625);
-        return appendDecodedQzssNumber(messages, "C5/災害中心緯度差コード", latitude) &&
-               appendDecodedQzssFixed(messages, "C5/災害中心緯度差", latitudeDelta, 5, "°") &&
-               appendDecodedQzssNumber(messages, "C6/災害中心経度差コード", longitude) &&
-               appendDecodedQzssFixed(messages, "C6/災害中心経度差", longitudeDelta, 5, "°") &&
+        std::snprintf(label, sizeof(label), "C5/中心緯度差(コード=%u)", static_cast<unsigned>(latitude));
+        if (!appendDecodedQzssFixed(messages, label, latitudeDelta, 5, "°"))
+            return false;
+        std::snprintf(label, sizeof(label), "C6/中心経度差(コード=%u)", static_cast<unsigned>(longitude));
+        return appendDecodedQzssFixed(messages, label, longitudeDelta, 5, "°") &&
                appendDecodedQzssNumber(messages, "A18/B2予約", getBits(frame, 145, 1));
     }
 
@@ -1857,13 +1891,13 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
         char shiftText[16];
         char factorText[24];
         char instructionText[96];
+        std::snprintf(label, sizeof(label), "C9/第2楕円方位(コード=%u)", static_cast<unsigned>(bearing));
         std::snprintf(shiftText, sizeof(shiftText), "%u/4長半径", static_cast<unsigned>(shift));
         std::snprintf(factorText, sizeof(factorText), "%s倍", homotheticFactors[factor]);
         std::snprintf(instructionText, sizeof(instructionText), "%s", dcxSecondEllipseInstruction(instruction));
         return appendDecodedQzssValue(messages, "C7/第2楕円中心シフト", shift, shiftText) &&
                appendDecodedQzssValue(messages, "C8/第2楕円軸倍率", factor, factorText) &&
-               appendDecodedQzssNumber(messages, "C9/第2楕円方位コード", bearing) &&
-               appendDecodedQzssFixed(messages, "C9/第2楕円方位", static_cast<int32_t>(bearing * 1125), 2, "°") &&
+               appendDecodedQzssFixed(messages, label, static_cast<int32_t>(bearing * 1125), 2, "°") &&
                appendDecodedQzssValue(messages, "C10/第2楕円行動指示", instruction + 1, instructionText);
     }
 
@@ -1968,7 +2002,7 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
             messages.length[1] = static_cast<uint16_t>(position);
         }
     }
-    if (!appendDecodedQzssLine(messages, "--- MT44 全フィールド ---"))
+    if (!appendDecodedQzssLine(messages, "MT44詳細"))
         return false;
 
     const uint32_t messageType = getBits(frame, 24, 2);
@@ -2016,17 +2050,16 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
                                 satelliteMaskType ? "MT44送信状態" : "サービス種別") ||
         !appendDecodedQzssBits(messages, frame, "SDM/SV1-SV9", 15, 9) ||
         !appendDecodedQzssNumber(messages, "SV/受信衛星", satelliteId) ||
-        !appendDecodedQzssValue(messages, "A1/種別", messageType, messageTypes[messageType]) ||
-        !appendDecodedQzssValue(messages, "A2/国地域", country, countryText) ||
+        !appendDecodedQzssValue(messages, "A1/通報種別", messageType, messageTypes[messageType]) ||
+        !appendDecodedQzssValue(messages, "A2/地域", country, countryText) ||
         !appendDecodedQzssValue(messages, "A3/配信元", provider, providerText) ||
-        !appendDecodedQzssValue(messages, "A4/災害種別", hazard, dcxHazardText(hazard)) ||
+        !appendDecodedQzssValue(messages, "A4/災害", hazard, dcxHazardText(hazard)) ||
         !appendDecodedQzssValue(messages, "A5/重大度", severity, severities[severity]) ||
         !appendDecodedQzssValue(messages, "A6/発生週", onsetWeek, onsetWeek ? "次週" : "今週") ||
         !appendDecodedQzssValue(messages, "A7/週内時刻(協定世界時)", onsetTimeOfWeek, a7Description) ||
         !appendDecodedQzssValue(messages, "A8/継続時間", duration, durations[duration]) ||
         !appendDecodedQzssValue(messages, "A9/指示ライブラリ", library, libraries[library]) ||
-        !appendDecodedQzssValue(messages, "A10/ライブラリ版", libraryVersion, libraryVersionText) ||
-        !appendDecodedQzssNumber(messages, "A11/行動指示コード", instruction))
+        !appendDecodedQzssValue(messages, "A10/ライブラリ版", libraryVersion, libraryVersionText))
         return false;
     for (uint8_t i = 0; i < 9; ++i) {
         const uint32_t satelliteField = getBits(frame, 15 + i, 1);
@@ -2040,21 +2073,23 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
         char instructionText[144];
         if (!formatDcxInstruction(instruction, instructionText, sizeof(instructionText)))
             return false;
-        if (instructionText[0] != '\0') {
-            std::snprintf(line, sizeof(line), "A11の意味=%s", instructionText);
-            if (!appendDecodedQzssLine(messages, line))
-                return false;
-        }
+        if (instructionText[0])
+            std::snprintf(line, sizeof(line), "A11/行動指示=%u(%s)", static_cast<unsigned>(instruction), instructionText);
+        else
+            std::snprintf(line, sizeof(line), "A11/行動指示=%u", static_cast<unsigned>(instruction));
+        if (!appendDecodedQzssLine(messages, line))
+            return false;
     } else if (library == 0) {
         const uint32_t actionA = instruction >> 5;
         const uint32_t actionB = instruction & 0x1F;
-        if (!appendDecodedQzssValue(messages, "A11/行動指示A", actionA + 1, dcxInternationalInstructionA(actionA)) ||
+        if (!appendDecodedQzssNumber(messages, "A11/行動指示コード", instruction) ||
+            !appendDecodedQzssValue(messages, "A11/行動指示A", actionA + 1, dcxInternationalInstructionA(actionA)) ||
             !appendDecodedQzssValue(messages, "A11/行動指示B", actionB + 1, dcxInternationalInstructionB(actionB)))
             return false;
-    } else if (!japanJAlert &&
-               (!appendDecodedQzssValue(messages, "A11/地域別行動指示", instruction, "地域別定義・未対応") ||
-                !appendDecodedQzssLine(messages, "行動指示の意味は未対応"))) {
-        return false;
+    } else if (!japanJAlert) {
+        std::snprintf(line, sizeof(line), "A11/行動指示=%u(地域別定義・未対応)", static_cast<unsigned>(instruction));
+        if (!appendDecodedQzssLine(messages, line))
+            return false;
     }
 
     if (!appendDecodedQzssNumber(messages, "A12/楕円中心緯度コード", getBits(frame, 80, 16)) ||
