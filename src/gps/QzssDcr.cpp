@@ -1512,6 +1512,27 @@ bool formatDcrLocalTime(time_t timestamp, char *output, size_t capacity)
     return length >= 0 && static_cast<size_t>(length) < capacity;
 }
 
+bool formatDcxOnsetLocalTime(uint32_t onsetWeek, uint32_t onsetTimeOfWeek, char *output, size_t capacity)
+{
+    if (onsetWeek > 1 || onsetTimeOfWeek == 0 || onsetTimeOfWeek > 10080)
+        return false;
+    const time_t now = static_cast<time_t>(getValidTime(RTCQualityFromNet));
+    if (!now)
+        return false;
+    const struct tm *nowUtcValue = gmtime(&now);
+    if (!nowUtcValue)
+        return false;
+    struct tm weekStart = *nowUtcValue;
+    weekStart.tm_mday -= (weekStart.tm_wday + 6) % 7;
+    weekStart.tm_hour = 0;
+    weekStart.tm_min = 0;
+    weekStart.tm_sec = 0;
+    const time_t currentWeekStart = gm_mktime(&weekStart);
+    const time_t onsetEpoch = currentWeekStart + static_cast<time_t>(onsetWeek * 7 * SEC_PER_DAY +
+                                                                     (onsetTimeOfWeek - 1) * SEC_PER_MIN);
+    return formatDcrLocalTime(onsetEpoch, output, capacity);
+}
+
 bool formatDcrRelativeTsunamiArrival(time_t reportEpoch, unsigned dayOffset, unsigned hour, unsigned minute,
                                      char *output, size_t capacity)
 {
@@ -2244,7 +2265,7 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
     const char *countryText = dcxCountryText(country);
     const char *providerText = dcxProviderText(country, provider);
     const bool japanJAlert = country == 111 && (provider == 2 || provider == 3);
-    char a7Description[40];
+    char a7Description[64];
     char libraryVersionText[12];
     std::snprintf(libraryVersionText, sizeof(libraryVersionText), "第%u版", static_cast<unsigned>(libraryVersion + 1));
     if (onsetTimeOfWeek == 0) {
@@ -2253,8 +2274,9 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
         const uint32_t minuteOfWeek = onsetTimeOfWeek - 1;
         const uint32_t weekday = minuteOfWeek / 1440;
         const uint32_t minuteOfDay = minuteOfWeek % 1440;
-        std::snprintf(a7Description, sizeof(a7Description), "%s曜 %02u:%02u 協定世界時", weekdays[weekday],
-                      static_cast<unsigned>(minuteOfDay / 60), static_cast<unsigned>(minuteOfDay % 60));
+        if (!formatDcxOnsetLocalTime(onsetWeek, onsetTimeOfWeek, a7Description, sizeof(a7Description)))
+            std::snprintf(a7Description, sizeof(a7Description), "%s曜 %02u:%02u UTC", weekdays[weekday],
+                          static_cast<unsigned>(minuteOfDay / 60), static_cast<unsigned>(minuteOfDay % 60));
     } else {
         std::snprintf(a7Description, sizeof(a7Description), "未使用コード");
     }
@@ -2272,7 +2294,7 @@ bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMe
         !appendDecodedQzssValue(messages, "A4/災害", hazard, dcxHazardText(hazard)) ||
         !appendDecodedQzssValue(messages, "A5/重大度", severity, severities[severity]) ||
         !appendDecodedQzssValue(messages, "A6/発生週", onsetWeek, onsetWeek ? "次週" : "今週") ||
-        !appendDecodedQzssValue(messages, "A7/週内時刻(協定世界時)", onsetTimeOfWeek, a7Description) ||
+        !appendDecodedQzssValue(messages, "A7/週内時刻", onsetTimeOfWeek, a7Description) ||
         !appendDecodedQzssValue(messages, "A8/継続時間", duration, durations[duration]) ||
         !appendDecodedQzssValue(messages, "A9/指示ライブラリ", library, libraries[library]) ||
         !appendDecodedQzssValue(messages, "A10/ライブラリ版", libraryVersion, libraryVersionText))
