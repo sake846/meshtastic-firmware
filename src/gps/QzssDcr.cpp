@@ -1509,7 +1509,7 @@ bool appendDcrLatitudeLongitude(DecodedQzssMessages &messages, const uint8_t *fr
     return appendDecodedQzssNumber(messages, "経度 秒", getBits(frame, firstBit + 35, 6));
 }
 
-bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, uint8_t satelliteId, uint32_t hazard)
+bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard)
 {
     const uint32_t reportClass = getBits(frame, 14, 3);
     const uint32_t reportedAt = getBits(frame, 21, 20);
@@ -1517,9 +1517,7 @@ bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, 
     const char *reportClassText = dcrReportClassText(reportClass);
     const char *hazardText = dcrHazardText(hazard);
 
-    if (!appendDecodedQzssHex(messages, "先頭8ビット", getBits(frame, 0, 8), 2) ||
-        !appendDecodedQzssNumber(messages, "衛星", satelliteId) ||
-        !appendDecodedQzssValue(messages, "区分", reportClass, reportClassText) ||
+    if (!appendDecodedQzssValue(messages, "区分", reportClass, reportClassText) ||
         !appendDecodedQzssValue(messages, "災害", hazard, hazardText) ||
         !appendDecodedQzssValue(messages, "情報", infoType, dcrInformationTypeText(hazard, infoType)))
         return false;
@@ -1539,13 +1537,12 @@ bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, 
         return false;
     }
     if (hazard == 1) {
-        return appendDecodedQzssNumber(messages, "予約領域1", getBits(frame, 43, 4)) &&
-               appendDcrCodeValue(messages, "長周期地震動下限", getBits(frame, 47, 3),
+        return appendDcrCodeValue(messages, "長周期地震動下限", getBits(frame, 47, 3),
                                   QzssDcrCodeTables::Id::LongPeriodGroundMotionLowerLimit) &&
                appendDcrCodeValue(messages, "長周期地震動上限", getBits(frame, 50, 3),
                                   QzssDcrCodeTables::Id::LongPeriodGroundMotionUpperLimit);
     }
-    return appendDecodedQzssNumber(messages, "予約領域1", getBits(frame, 43, hazard == 8 ? 7 : 10));
+    return true;
 }
 
 bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard)
@@ -1570,9 +1567,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                 QzssDcrCodeTables::Id::SeismicIntensityLowerLimit) ||
             !appendDcrCodeValue(messages, "震度上限", getBits(frame, 126, 4),
                                 QzssDcrCodeTables::Id::SeismicIntensityUpperLimit) ||
-            !appendDecodedQzssBits(messages, frame, "予測地域ビットマップ", 130, 80) ||
-            !appendDcrBitmapRegions(messages, frame, "予測地域", 130, 80) ||
-            !appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 210, 4)))
+            !appendDcrBitmapRegions(messages, frame, "予測地域", 130, 80))
             return false;
         return true;
     }
@@ -1590,8 +1585,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                   QzssDcrCodeTables::Id::HypocenterMagnitude) &&
                appendDcrCodeValue(messages, "震央・震源", getBits(frame, 112, 10),
                                   QzssDcrCodeTables::Id::EpicenterAndHypocenter) &&
-               appendDcrLatitudeLongitude(messages, frame, 122) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits64(frame, 163, 51));
+               appendDcrLatitudeLongitude(messages, frame, 122);
     case 3: {
         static constexpr DcrArrayField fields[] = {
             {"震度", 0, 3, QzssDcrCodeTables::Id::SeismicIntensity},
@@ -1602,7 +1596,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
         if (!appendDcrArrayRecords(messages, frame, "震度・都道府県", 69, 9, 16, 9, fields,
                                    sizeof(fields) / sizeof(fields[0])))
             return false;
-        return appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 213, 1));
+        return true;
     }
     case 4: {
         const uint32_t serial = getBits(frame, 53, 4);
@@ -1611,8 +1605,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             !appendDcrNankaiText(messages, frame))
             return false;
         return appendDecodedQzssNumber(messages, "ページ番号", getBits(frame, 201, 6)) &&
-               appendDecodedQzssNumber(messages, "総ページ数", getBits(frame, 207, 6)) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 213, 1));
+               appendDecodedQzssNumber(messages, "総ページ数", getBits(frame, 207, 6));
     }
     case 5: {
         static constexpr DcrArrayField fields[] = {
@@ -1646,8 +1639,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                 QzssDcrCodeTables::Id::TsunamigenicPotential))
             return false;
         return appendDcrArrayRecords(messages, frame, "津波到達情報", 56, 28, 5, 28, fields,
-                                     sizeof(fields) / sizeof(fields[0])) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 196, 18));
+                                     sizeof(fields) / sizeof(fields[0]));
     }
     case 8:
         if (!appendDecodedQzssValue(messages, "活動時刻の曖昧さ", getBits(frame, 50, 3),
@@ -1658,8 +1650,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             !appendDcrCodeValue(messages, "火山名", getBits(frame, 76, 12), QzssDcrCodeTables::Id::VolcanoName))
             return false;
         return appendDcrArrayValues(messages, frame, "対象自治体", 88, 23, 0, 23, 5,
-                                    QzssDcrCodeTables::Id::LocalGovernment, 23) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 203, 11));
+                                    QzssDcrCodeTables::Id::LocalGovernment, 23);
     case 9: {
         static constexpr DcrArrayField fields[] = {
             {"予想時間", 0, 3, QzssDcrCodeTables::Id::ExpectedAshFallTime},
@@ -1672,8 +1663,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             !appendDcrCodeValue(messages, "火山名", getBits(frame, 71, 12), QzssDcrCodeTables::Id::VolcanoName))
             return false;
         return appendDcrArrayRecords(messages, frame, "降灰予想", 83, 29, 4, 29, fields,
-                                     sizeof(fields) / sizeof(fields[0])) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 199, 15));
+                                     sizeof(fields) / sizeof(fields[0]));
     }
     case 10: {
         static constexpr DcrArrayField fields[] = {
@@ -1684,8 +1674,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                 QzssDcrCodeTables::Id::WeatherWarningState))
             return false;
         return appendDcrArrayRecords(messages, frame, "気象警報・地域", 56, 24, 6, 24, fields,
-                                     sizeof(fields) / sizeof(fields[0])) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 200, 14));
+                                     sizeof(fields) / sizeof(fields[0]));
     }
     case 11: {
         static constexpr DcrArrayField fields[] = {
@@ -1693,15 +1682,13 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             {"洪水予報区", 4, 40, QzssDcrCodeTables::Id::FloodForecastRegion},
         };
         return appendDcrArrayRecords(messages, frame, "水位警報・洪水予報区", 53, 44, 3, 44, fields,
-                                     sizeof(fields) / sizeof(fields[0])) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 185, 29));
+                                     sizeof(fields) / sizeof(fields[0]));
     }
     case 12: {
         const uint32_t referenceTimeType = getBits(frame, 69, 3);
         return appendDcrTimeFields(messages, frame, "基点時刻", 53) &&
                appendDcrCodeValue(messages, "基点時刻分類", referenceTimeType,
                                   QzssDcrCodeTables::Id::TyphoonReferenceTimeType) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 72, 8)) &&
                appendDcrCodeValue(messages, "基点時刻からの経過", getBits(frame, 80, 7),
                                   QzssDcrCodeTables::Id::TyphoonElapsedTimeFromReferenceTime) &&
                appendDcrCodeValue(messages, "台風番号", getBits(frame, 87, 7), QzssDcrCodeTables::Id::TyphoonNumber) &&
@@ -1715,8 +1702,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                appendDcrCodeValue(messages, "最大風速", getBits(frame, 154, 7),
                                   QzssDcrCodeTables::Id::TyphoonMaximumWindSpeed) &&
                appendDcrCodeValue(messages, "最大瞬間風速", getBits(frame, 161, 7),
-                                  QzssDcrCodeTables::Id::TyphoonMaximumGustWindSpeed) &&
-               appendDecodedQzssNumber(messages, "予約領域3", getBits64(frame, 168, 46));
+                                  QzssDcrCodeTables::Id::TyphoonMaximumGustWindSpeed);
     }
     case 14: {
         static constexpr DcrArrayField fields[] = {
@@ -1724,22 +1710,19 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             {"海域", 5, 14, QzssDcrCodeTables::Id::MarineForecastRegion},
         };
         return appendDcrArrayRecords(messages, frame, "海上警報・海域", 53, 19, 8, 19, fields,
-                                     sizeof(fields) / sizeof(fields[0])) &&
-               appendDecodedQzssNumber(messages, "予約領域2", getBits(frame, 205, 9));
+                                     sizeof(fields) / sizeof(fields[0]));
     }
     default:
         return appendDecodedQzssBits(messages, frame, "未定義災害データ（53-213ビット）", 53, 161);
     }
 }
 
-bool formatDcrMessage(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMessages &messages)
+bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
 {
     const uint32_t hazard = getBits(frame, 17, 4);
     initDecodedQzssMessages(messages, "みちびき災危通報 MT43");
-    return appendDcrReportHeader(messages, frame, satelliteId, hazard) && appendDcrCategoryFields(messages, frame, hazard) &&
-           appendDecodedQzssNumber(messages, "仕様バージョン", getBits(frame, 214, 6)) &&
-           appendDecodedQzssNumber(messages, "予約領域", getBits(frame, 220, 6)) &&
-           appendDecodedQzssHex(messages, "誤り検出符号CRC24Q", getBits(frame, 226, 24), 6);
+    return appendDcrReportHeader(messages, frame, hazard) && appendDcrCategoryFields(messages, frame, hazard) &&
+           appendDecodedQzssNumber(messages, "予約領域", getBits(frame, 220, 6));
 }
 
 bool formatDcxInstruction(uint32_t code, char *text, size_t capacity)
@@ -2405,7 +2388,7 @@ void publishFrame(const uint8_t *payload)
     // GPS parsing is single-threaded; keep this multi-kilobyte buffer off the loop task stack.
     static DecodedQzssMessages messages;
     if (messageType == 43) {
-        if (!formatDcrMessage(frame, svId, messages))
+        if (!formatDcrMessage(frame, messages))
             return;
     } else if (!formatDcxAllFields(frame, svId, messages)) {
         return;
