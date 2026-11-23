@@ -2261,6 +2261,18 @@ void publishFrame(const uint8_t *payload)
         return;
     if (messageType != 43 && messageType != 44)
         return;
+
+    static constexpr char hexDigits[] = "0123456789ABCDEF";
+    char rawFrameHex[sizeof(frame) * 3] = {};
+    for (size_t i = 0; i < sizeof(frame); ++i) {
+        const size_t position = i * 3;
+        rawFrameHex[position] = hexDigits[frame[i] >> 4];
+        rawFrameHex[position + 1] = hexDigits[frame[i] & 0x0F];
+        if (i + 1 < sizeof(frame))
+            rawFrameHex[position + 2] = ' ';
+    }
+    LOG_INFO("QZSS MT%u raw: %s", static_cast<unsigned>(messageType), rawFrameHex);
+
     lastMt43Or44Ms = now;
     hasMt43Or44 = true;
     if (messageType == 44 && isDcxNullMessage(frame))
