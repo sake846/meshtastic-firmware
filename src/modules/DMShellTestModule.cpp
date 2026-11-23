@@ -677,7 +677,7 @@ DMShellTestModule::SentFrame *DMShellTestModule::findSent(uint32_t seq)
 
 void DMShellTestModule::logStats(uint32_t now)
 {
-    // Short lines: the board's log buffer is 160 bytes and truncates a longer one
+    // Keep the lines short even though the board log buffer can hold up to 320 bytes.
     const unsigned id = (unsigned)sessionId;
     const uint32_t elapsedMs = now - (openedAtMs ? openedAtMs : sessionStartMs);
     // Everything below the window's cursor was delivered, whether it arrived in order or was drained from the reorder

@@ -54,7 +54,7 @@ size_t RedirectablePrint::vprintf(const char *logLevel, const char *format, va_l
 #if ARCH_PORTDUINO
     static char printBuf[512];
 #else
-    static char printBuf[160];
+    static char printBuf[320];
 #endif
 
 #ifdef ARCH_PORTDUINO

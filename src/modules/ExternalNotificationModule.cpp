@@ -68,6 +68,7 @@ bool ascending = true;
 #define EXT_NOTIFICATION_MODULE_OUTPUT_MS 1000
 
 #define EXT_NOTIFICATION_FAST_THREAD_MS 25
+#define EXT_NOTIFICATION_I2S_THREAD_MS 5
 
 #define ASCII_BELL 0x07
 
@@ -136,7 +137,8 @@ int32_t ExternalNotificationModule::runOnce()
         bool isRtttlPlaying = rtttl::isPlaying();
 #ifdef HAS_I2S
         // audioThread->isPlaying() also handles actually playing the RTTTL, needs to be called in loop
-        isRtttlPlaying = isRtttlPlaying || audioThread->isPlaying();
+        const bool isI2sPlaying = audioThread->isPlaying();
+        isRtttlPlaying = isRtttlPlaying || isI2sPlaying;
 #endif
 #if defined(HAS_I2S_SPEAKER_NRF52)
         isRtttlPlaying = isRtttlPlaying || nrf52RtttlPlayer.isPlaying();
@@ -203,13 +205,13 @@ int32_t ExternalNotificationModule::runOnce()
         // Play RTTTL over i2s audio interface if enabled as buzzer
 #if defined(HAS_I2S) && !MESHTASTIC_EXCLUDE_RTTTL
         if (moduleConfig.external_notification.use_i2s_as_buzzer) {
-            if (audioThread->isPlaying()) {
+            if (isI2sPlaying) {
                 // Continue playing
             } else if (isNagging && !Throttle::deadlinePassed(nagCycleCutoff)) {
                 audioThread->beginRttl(rtttlConfig.ringtone, strlen_P(rtttlConfig.ringtone));
             }
-            // we need fast updates to play the RTTTL
-            delay = EXT_NOTIFICATION_FAST_THREAD_MS;
+            // Keep the producer ahead of the 8 x 128-sample I2S DMA queue.
+            delay = EXT_NOTIFICATION_I2S_THREAD_MS;
         }
 #endif
 #if defined(HAS_I2S_SPEAKER_NRF52) && !MESHTASTIC_EXCLUDE_RTTTL
