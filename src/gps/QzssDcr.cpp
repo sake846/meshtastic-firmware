@@ -1180,11 +1180,16 @@ struct DcrArrayField {
     uint8_t offset;
     uint8_t width;
     QzssDcrCodeTables::Id table;
+    bool relativeTsunamiArrival = false;
 };
+
+bool formatDcrLocalTime(time_t timestamp, char *output, size_t capacity);
+bool formatDcrRelativeTsunamiArrival(time_t reportEpoch, unsigned dayOffset, unsigned hour, unsigned minute,
+                                     char *output, size_t capacity);
 
 bool appendDcrArrayRecords(DecodedQzssMessages &messages, const uint8_t *frame, const char *name, uint16_t firstBit,
                            uint8_t stride, uint8_t count, uint8_t recordWidth, const DcrArrayField *fields,
-                           size_t fieldCount)
+                           size_t fieldCount, time_t reportEpoch)
 {
     constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
     static char line[capacity];
@@ -1214,6 +1219,25 @@ bool appendDcrArrayRecords(DecodedQzssMessages &messages, const uint8_t *frame, 
             position += static_cast<size_t>(fieldNameLength);
 
             const uint64_t value = getBits64(frame, recordBit + field.offset, field.width);
+            if (field.relativeTsunamiArrival) {
+                char localTime[48] = {};
+                const unsigned dayOffset = static_cast<unsigned>(value >> 11);
+                const unsigned hour = static_cast<unsigned>((value >> 6) & 0x1F);
+                const unsigned minute = static_cast<unsigned>(value & 0x3F);
+                const bool localized = formatDcrRelativeTsunamiArrival(reportEpoch, dayOffset, hour, minute,
+                                                                        localTime, sizeof(localTime));
+                if (!localized && dayOffset <= 1 && hour <= 23 && minute <= 59)
+                    std::snprintf(localTime, sizeof(localTime), "+%u日 %02u:%02u UTC", dayOffset, hour, minute);
+                if (localized || localTime[0]) {
+                    const size_t localTimeLength = std::strlen(localTime);
+                    if (position + localTimeLength >= sizeof(line))
+                        return false;
+                    std::memcpy(line + position, localTime, localTimeLength);
+                    position += localTimeLength;
+                    line[position] = '\0';
+                    continue;
+                }
+            }
             const char *meaning = field.table == QzssDcrCodeTables::Id::None
                                       ? nullptr
                                       : QzssDcrCodeTables::lookup(field.table, value, meaningBuffer, sizeof(meaningBuffer));
@@ -1406,30 +1430,48 @@ bool appendDcrBitmapRegions(DecodedQzssMessages &messages, const uint8_t *frame,
     return appendDecodedQzssLine(messages, line);
 }
 
-bool appendDcrTimeFields(DecodedQzssMessages &messages, const uint8_t *frame, const char *prefix, uint16_t firstBit)
+bool formatDcrEventLocalTime(time_t reportEpoch, unsigned day, unsigned hour, unsigned minute, char *output,
+                             size_t capacity);
+
+bool appendDcrTimeFields(DecodedQzssMessages &messages, const uint8_t *frame, const char *prefix, uint16_t firstBit,
+                         time_t reportEpoch)
 {
+    const unsigned day = static_cast<unsigned>(getBits(frame, firstBit, 5));
+    const unsigned hour = static_cast<unsigned>(getBits(frame, firstBit + 5, 5));
+    const unsigned minute = static_cast<unsigned>(getBits(frame, firstBit + 10, 6));
+    if (day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
+        char localTime[48];
+        char line[80];
+        const bool localized = reportEpoch &&
+                               formatDcrEventLocalTime(reportEpoch, day, hour, minute, localTime, sizeof(localTime));
+        if (!localized)
+            std::snprintf(localTime, sizeof(localTime), "%02u日 %02u:%02u UTC", day, hour, minute);
+        const int length = std::snprintf(line, sizeof(line), "%s=%s", prefix, localTime);
+        return length >= 0 && static_cast<size_t>(length) < sizeof(line) && appendDecodedQzssLine(messages, line);
+    }
+
     char name[64];
     std::snprintf(name, sizeof(name), "%s（日）", prefix);
-    if (!appendDecodedQzssNumber(messages, name, getBits(frame, firstBit, 5)))
+    if (!appendDecodedQzssNumber(messages, name, day))
         return false;
     std::snprintf(name, sizeof(name), "%s（時）", prefix);
-    if (!appendDecodedQzssNumber(messages, name, getBits(frame, firstBit + 5, 5)))
+    if (!appendDecodedQzssNumber(messages, name, hour))
         return false;
     std::snprintf(name, sizeof(name), "%s（分）", prefix);
-    return appendDecodedQzssNumber(messages, name, getBits(frame, firstBit + 10, 6));
+    return appendDecodedQzssNumber(messages, name, minute);
 }
 
-bool formatDcrJstTime(unsigned month, unsigned day, unsigned hour, unsigned minute, char *output, size_t capacity)
+bool findDcrReportEpoch(unsigned month, unsigned day, unsigned hour, unsigned minute, time_t &reportEpoch)
 {
     const time_t now = static_cast<time_t>(getValidTime(RTCQualityFromNet));
     if (!now)
         return false;
-    const struct tm *nowUtc = gmtime(&now);
-    if (!nowUtc)
+    const struct tm *nowUtcValue = gmtime(&now);
+    if (!nowUtcValue)
         return false;
 
-    const int currentYear = nowUtc->tm_year;
-    time_t reportEpoch = 0;
+    const struct tm nowUtc = *nowUtcValue;
+    const int currentYear = nowUtc.tm_year;
     uint64_t closestDistance = UINT64_MAX;
     // MT43 omits the year, so use the date closest to the device's current time.
     for (int year = currentYear - 1; year <= currentYear + 1; ++year) {
@@ -1452,17 +1494,83 @@ bool formatDcrJstTime(unsigned month, unsigned day, unsigned hour, unsigned minu
             reportEpoch = candidate;
         }
     }
-    if (!reportEpoch)
-        return false;
+    return reportEpoch != 0;
+}
 
-    const time_t jstEpoch = reportEpoch + 9 * SEC_PER_HOUR;
-    const struct tm *jst = gmtime(&jstEpoch);
-    if (!jst)
+bool formatDcrLocalTime(time_t timestamp, char *output, size_t capacity)
+{
+    const struct tm *localTimeValue = localtime(&timestamp);
+    if (!localTimeValue)
         return false;
+    const struct tm localTime = *localTimeValue;
+    char timezone[16];
+    const size_t timezoneLength = strftime(timezone, sizeof(timezone), "%Z", &localTime);
+    const int length = timezoneLength ? std::snprintf(output, capacity, "%02d/%02d %02d:%02d %s", localTime.tm_mon + 1,
+                                                       localTime.tm_mday, localTime.tm_hour, localTime.tm_min, timezone)
+                                     : std::snprintf(output, capacity, "%02d/%02d %02d:%02d", localTime.tm_mon + 1,
+                                                     localTime.tm_mday, localTime.tm_hour, localTime.tm_min);
+    return length >= 0 && static_cast<size_t>(length) < capacity;
+}
 
-    std::snprintf(output, capacity, "発表=%02d/%02d %02d:%02d JST", jst->tm_mon + 1, jst->tm_mday, jst->tm_hour,
-                  jst->tm_min);
-    return true;
+bool formatDcrRelativeTsunamiArrival(time_t reportEpoch, unsigned dayOffset, unsigned hour, unsigned minute,
+                                     char *output, size_t capacity)
+{
+    if (!reportEpoch || dayOffset > 1 || hour > 23 || minute > 59)
+        return false;
+    const struct tm *reportUtcValue = gmtime(&reportEpoch);
+    if (!reportUtcValue)
+        return false;
+    struct tm arrivalUtc = *reportUtcValue;
+    arrivalUtc.tm_mday += static_cast<int>(dayOffset);
+    arrivalUtc.tm_hour = static_cast<int>(hour);
+    arrivalUtc.tm_min = static_cast<int>(minute);
+    arrivalUtc.tm_sec = 0;
+    const time_t arrivalEpoch = gm_mktime(&arrivalUtc);
+    return arrivalEpoch && formatDcrLocalTime(arrivalEpoch, output, capacity);
+}
+
+bool formatDcrEventLocalTime(time_t reportEpoch, unsigned day, unsigned hour, unsigned minute, char *output,
+                             size_t capacity)
+{
+    const struct tm *reportUtcValue = gmtime(&reportEpoch);
+    if (!reportUtcValue)
+        return false;
+    const struct tm reportUtc = *reportUtcValue;
+    time_t eventEpoch = 0;
+    uint64_t closestDistance = UINT64_MAX;
+    // The event fields omit month and year, so choose the matching date nearest the report time.
+    for (int monthOffset = -1; monthOffset <= 1; ++monthOffset) {
+        struct tm monthStart = reportUtc;
+        monthStart.tm_mday = 1;
+        monthStart.tm_mon += monthOffset;
+        monthStart.tm_hour = 0;
+        monthStart.tm_min = 0;
+        monthStart.tm_sec = 0;
+        const time_t monthEpoch = gm_mktime(&monthStart);
+        const struct tm *monthUtcValue = gmtime(&monthEpoch);
+        if (!monthUtcValue)
+            continue;
+        const struct tm monthUtc = *monthUtcValue;
+
+        struct tm candidateTime = monthUtc;
+        candidateTime.tm_mday = static_cast<int>(day);
+        candidateTime.tm_hour = static_cast<int>(hour);
+        candidateTime.tm_min = static_cast<int>(minute);
+        candidateTime.tm_sec = 0;
+        const time_t candidate = gm_mktime(&candidateTime);
+        const struct tm *normalizedValue = gmtime(&candidate);
+        if (!normalizedValue || normalizedValue->tm_year != monthUtc.tm_year ||
+            normalizedValue->tm_mon != monthUtc.tm_mon || normalizedValue->tm_mday != static_cast<int>(day))
+            continue;
+
+        const uint64_t distance = candidate > reportEpoch ? static_cast<uint64_t>(candidate - reportEpoch)
+                                                          : static_cast<uint64_t>(reportEpoch - candidate);
+        if (distance < closestDistance) {
+            closestDistance = distance;
+            eventEpoch = candidate;
+        }
+    }
+    return eventEpoch && formatDcrLocalTime(eventEpoch, output, capacity);
 }
 
 const char *dcrActivityTimeAmbiguityText(uint32_t code)
@@ -1509,13 +1617,14 @@ bool appendDcrLatitudeLongitude(DecodedQzssMessages &messages, const uint8_t *fr
     return appendDecodedQzssNumber(messages, "経度 秒", getBits(frame, firstBit + 35, 6));
 }
 
-bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard)
+bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard, time_t &reportEpoch)
 {
     const uint32_t reportClass = getBits(frame, 14, 3);
     const uint32_t reportedAt = getBits(frame, 21, 20);
     const uint32_t infoType = getBits(frame, 41, 2);
     const char *reportClassText = dcrReportClassText(reportClass);
     const char *hazardText = dcrHazardText(hazard);
+    reportEpoch = 0;
 
     if (!appendDecodedQzssValue(messages, "区分", reportClass, reportClassText) ||
         !appendDecodedQzssValue(messages, "災害", hazard, hazardText) ||
@@ -1528,9 +1637,16 @@ bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, 
     const unsigned minute = static_cast<unsigned>(reportedAt & 0x3F);
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
         char timeText[64];
-        if (!formatDcrJstTime(month, day, hour, minute, timeText, sizeof(timeText)))
-            std::snprintf(timeText, sizeof(timeText), "発表=%02u/%02u %02u:%02u UTC", month, day, hour, minute);
-        if (!appendDecodedQzssLine(messages, timeText))
+        char line[80];
+        int length;
+        if (!findDcrReportEpoch(month, day, hour, minute, reportEpoch) ||
+            !formatDcrLocalTime(reportEpoch, timeText, sizeof(timeText)))
+            length = std::snprintf(line, sizeof(line), "発表=%02u/%02u %02u:%02u UTC", month, day, hour, minute);
+        else
+            length = std::snprintf(line, sizeof(line), "発表=%s", timeText);
+        if (length < 0 || static_cast<size_t>(length) >= sizeof(line))
+            return false;
+        if (!appendDecodedQzssLine(messages, line))
             return false;
     } else if (!appendDecodedQzssNumber(messages, "発表月", month) || !appendDecodedQzssNumber(messages, "発表日", day) ||
                !appendDecodedQzssNumber(messages, "発表時", hour) || !appendDecodedQzssNumber(messages, "発表分", minute)) {
@@ -1545,7 +1661,7 @@ bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, 
     return true;
 }
 
-bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard)
+bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard, time_t reportEpoch)
 {
     char label[128];
     switch (hazard) {
@@ -1556,7 +1672,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                     QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
                 return false;
         }
-        if (!appendDcrTimeFields(messages, frame, "地震発生時刻", 80) ||
+        if (!appendDcrTimeFields(messages, frame, "地震発生時刻", 80, reportEpoch) ||
             !appendDcrCodeValue(messages, "震源深さ", getBits(frame, 96, 9),
                                 QzssDcrCodeTables::Id::DepthOfHypocenter) ||
             !appendDcrCodeValue(messages, "マグニチュード", getBits(frame, 105, 7),
@@ -1578,7 +1694,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                     QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
                 return false;
         }
-        return appendDcrTimeFields(messages, frame, "地震発生時刻", 80) &&
+        return appendDcrTimeFields(messages, frame, "地震発生時刻", 80, reportEpoch) &&
                appendDcrCodeValue(messages, "震源深さ", getBits(frame, 96, 9),
                                   QzssDcrCodeTables::Id::DepthOfHypocenter) &&
                appendDcrCodeValue(messages, "マグニチュード", getBits(frame, 105, 7),
@@ -1591,10 +1707,10 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             {"震度", 0, 3, QzssDcrCodeTables::Id::SeismicIntensity},
             {"都道府県", 3, 6, QzssDcrCodeTables::Id::Prefecture},
         };
-        if (!appendDcrTimeFields(messages, frame, "地震発生時刻", 53))
+        if (!appendDcrTimeFields(messages, frame, "地震発生時刻", 53, reportEpoch))
             return false;
         if (!appendDcrArrayRecords(messages, frame, "震度・都道府県", 69, 9, 16, 9, fields,
-                                   sizeof(fields) / sizeof(fields[0])))
+                                   sizeof(fields) / sizeof(fields[0]), reportEpoch))
             return false;
         return true;
     }
@@ -1609,9 +1725,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
     }
     case 5: {
         static constexpr DcrArrayField fields[] = {
-            {"到達日", 0, 1, QzssDcrCodeTables::Id::None},
-            {"到達時", 1, 5, QzssDcrCodeTables::Id::None},
-            {"到達分", 6, 6, QzssDcrCodeTables::Id::None},
+            {"到達時刻", 0, 12, QzssDcrCodeTables::Id::None, true},
             {"津波高さ", 12, 4, QzssDcrCodeTables::Id::TsunamiHeight},
             {"津波予報区", 16, 10, QzssDcrCodeTables::Id::TsunamiForecastRegion},
         };
@@ -1625,13 +1739,11 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                 QzssDcrCodeTables::Id::TsunamiWarningCode))
             return false;
         return appendDcrArrayRecords(messages, frame, "津波到達予報", 84, 26, 5, 26, fields,
-                                     sizeof(fields) / sizeof(fields[0]));
+                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
     case 6: {
         static constexpr DcrArrayField fields[] = {
-            {"到達日", 0, 1, QzssDcrCodeTables::Id::None},
-            {"到達時", 1, 5, QzssDcrCodeTables::Id::None},
-            {"到達分", 6, 6, QzssDcrCodeTables::Id::None},
+            {"到達時刻", 0, 12, QzssDcrCodeTables::Id::None, true},
             {"津波高さ", 12, 9, QzssDcrCodeTables::Id::NorthwestPacificTsunamiHeight},
             {"沿岸地域", 21, 7, QzssDcrCodeTables::Id::CoastalRegion},
         };
@@ -1639,12 +1751,12 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                 QzssDcrCodeTables::Id::TsunamigenicPotential))
             return false;
         return appendDcrArrayRecords(messages, frame, "津波到達情報", 56, 28, 5, 28, fields,
-                                     sizeof(fields) / sizeof(fields[0]));
+                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
     case 8:
         if (!appendDecodedQzssValue(messages, "活動時刻の曖昧さ", getBits(frame, 50, 3),
                                     dcrActivityTimeAmbiguityText(getBits(frame, 50, 3))) ||
-            !appendDcrTimeFields(messages, frame, "火山活動時刻", 53) ||
+            !appendDcrTimeFields(messages, frame, "火山活動時刻", 53, reportEpoch) ||
             !appendDcrCodeValue(messages, "火山警報", getBits(frame, 69, 7),
                                 QzssDcrCodeTables::Id::VolcanicWarningCode) ||
             !appendDcrCodeValue(messages, "火山名", getBits(frame, 76, 12), QzssDcrCodeTables::Id::VolcanoName))
@@ -1657,13 +1769,13 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             {"降灰警報", 3, 3, QzssDcrCodeTables::Id::AshFallWarningCode},
             {"対象自治体", 6, 23, QzssDcrCodeTables::Id::LocalGovernment},
         };
-        if (!appendDcrTimeFields(messages, frame, "火山活動時刻", 53) ||
+        if (!appendDcrTimeFields(messages, frame, "火山活動時刻", 53, reportEpoch) ||
             !appendDcrCodeValue(messages, "降灰情報種別", getBits(frame, 69, 2),
                                 QzssDcrCodeTables::Id::AshFallWarningType) ||
             !appendDcrCodeValue(messages, "火山名", getBits(frame, 71, 12), QzssDcrCodeTables::Id::VolcanoName))
             return false;
         return appendDcrArrayRecords(messages, frame, "降灰予想", 83, 29, 4, 29, fields,
-                                     sizeof(fields) / sizeof(fields[0]));
+                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
     case 10: {
         static constexpr DcrArrayField fields[] = {
@@ -1674,7 +1786,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
                                 QzssDcrCodeTables::Id::WeatherWarningState))
             return false;
         return appendDcrArrayRecords(messages, frame, "気象警報・地域", 56, 24, 6, 24, fields,
-                                     sizeof(fields) / sizeof(fields[0]));
+                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
     case 11: {
         static constexpr DcrArrayField fields[] = {
@@ -1682,11 +1794,11 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             {"洪水予報区", 4, 40, QzssDcrCodeTables::Id::FloodForecastRegion},
         };
         return appendDcrArrayRecords(messages, frame, "水位警報・洪水予報区", 53, 44, 3, 44, fields,
-                                     sizeof(fields) / sizeof(fields[0]));
+                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
     case 12: {
         const uint32_t referenceTimeType = getBits(frame, 69, 3);
-        return appendDcrTimeFields(messages, frame, "基点時刻", 53) &&
+        return appendDcrTimeFields(messages, frame, "基点時刻", 53, reportEpoch) &&
                appendDcrCodeValue(messages, "基点時刻分類", referenceTimeType,
                                   QzssDcrCodeTables::Id::TyphoonReferenceTimeType) &&
                appendDcrCodeValue(messages, "基点時刻からの経過", getBits(frame, 80, 7),
@@ -1710,7 +1822,7 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
             {"海域", 5, 14, QzssDcrCodeTables::Id::MarineForecastRegion},
         };
         return appendDcrArrayRecords(messages, frame, "海上警報・海域", 53, 19, 8, 19, fields,
-                                     sizeof(fields) / sizeof(fields[0]));
+                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
     default:
         return appendDecodedQzssBits(messages, frame, "未定義災害データ（53-213ビット）", 53, 161);
@@ -1720,8 +1832,10 @@ bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame
 bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
 {
     const uint32_t hazard = getBits(frame, 17, 4);
+    time_t reportEpoch = 0;
     initDecodedQzssMessages(messages, "みちびき災危通報 MT43");
-    return appendDcrReportHeader(messages, frame, hazard) && appendDcrCategoryFields(messages, frame, hazard) &&
+    return appendDcrReportHeader(messages, frame, hazard, reportEpoch) &&
+           appendDcrCategoryFields(messages, frame, hazard, reportEpoch) &&
            appendDecodedQzssNumber(messages, "予約領域", getBits(frame, 220, 6));
 }
 
