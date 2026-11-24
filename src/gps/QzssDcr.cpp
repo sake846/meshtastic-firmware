@@ -334,8 +334,8 @@ uint64_t mtFrameFingerprint(const uint8_t *frame)
 {
     uint64_t hash = 14695981039346656037ULL;
     const auto addByte = [&hash](uint8_t byte) { hash = (hash ^ byte) * 1099511628211ULL; };
-    // Hash the MT type and complete data payload, excluding preamble and CRC framing.
-    for (uint16_t bit = 8; bit < 226; ++bit)
+    // The preamble, trailing reserved bits and CRC do not identify a report.
+    for (uint16_t bit = 8; bit < 220; ++bit)
         addByte(getBit(frame, bit));
     return hash;
 }
@@ -369,28 +369,6 @@ bool isDuplicateMtFrame(const uint8_t *frame)
         availableIndex = oldestIndex;
     recentMtFrames[availableIndex] = {fingerprint, now, true};
     return false;
-}
-
-bool appendDcxText(char *message, size_t capacity, size_t &position, const char *text)
-{
-    const size_t length = std::strlen(text);
-    if (position >= capacity || length >= capacity - position)
-        return false;
-    std::memcpy(message + position, text, length);
-    position += length;
-    message[position] = '\0';
-    return true;
-}
-
-bool appendDcxNumber(char *message, size_t capacity, size_t &position, unsigned value)
-{
-    if (position >= capacity)
-        return false;
-    const int length = std::snprintf(message + position, capacity - position, "%u", value);
-    if (length < 0 || static_cast<size_t>(length) >= capacity - position)
-        return false;
-    position += static_cast<size_t>(length);
-    return true;
 }
 
 const char *dcxHazardText(uint32_t code)
@@ -689,7 +667,8 @@ const char *dcxProviderText(uint32_t country, uint32_t provider)
 const char *dcxInternationalInstructionA(uint32_t code)
 {
     static const char *const instructions[] = {
-        "指示なし", "危険区域から退避", "指定避難先へ退避", "建物内に避難", "地下・低層階へ避難", "山地から下山",
+        "指示なし", "危険区域から直ちに退避。続報を確認。", "危険区域から直ちに指定避難先へ。続報を確認。",
+        "直ちに建物内へ。屋内避難を続け、続報を確認。", "地下・低層階へ避難", "山地から下山",
         "屋内へ・車は路肩停車", "伏せて頭と首を保護", "避難準備", "非常物資を準備", "窓ガラスから離れる",
         "節電", "節水", "水道水は煮沸", "人との距離を確保・手洗い", "水道水を飲まない", "ガス漏れと火気に注意",
         "外出・車の使用を避ける", "不審物やがれきに触れない", "煙の充満した部屋に入らない", "地下室に入らない",
@@ -876,22 +855,6 @@ const char *dcxSeverityText(uint32_t severity)
     }
 }
 
-const char *dcrReportClassText(uint32_t reportClass)
-{
-    switch (reportClass) {
-    case 1:
-        return "最優先";
-    case 2:
-        return "優先";
-    case 3:
-        return "通常";
-    case 7:
-        return "訓練・試験";
-    default:
-        return nullptr;
-    }
-}
-
 const char *dcrHazardText(uint32_t hazard)
 {
     switch (hazard) {
@@ -945,19 +908,6 @@ struct DecodedQzssMessages {
     uint8_t count;
 };
 
-void initDecodedQzssMessages(DecodedQzssMessages &messages, const char *title)
-{
-    messages.count = 1;
-    messages.length[0] = 0;
-    messages.text[0][0] = '\0';
-    size_t position = 0;
-    if (appendDcxText(messages.text[0], sizeof(messages.text[0]), position, title) && position + 1 < sizeof(messages.text[0])) {
-        messages.text[0][position++] = '/';
-        messages.text[0][position] = '\0';
-    }
-    messages.length[0] = static_cast<uint16_t>(position);
-}
-
 bool appendDecodedQzssLine(DecodedQzssMessages &messages, const char *line)
 {
     constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
@@ -1002,23 +952,6 @@ bool appendDecodedQzssLine(DecodedQzssMessages &messages, const char *line)
         messages.length[index] = static_cast<uint16_t>(position);
     }
     return true;
-}
-
-bool appendDecodedQzssWholeLine(DecodedQzssMessages &messages, const char *line)
-{
-    constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
-    static constexpr char continuation[] = "（続き）/";
-    const size_t index = messages.count - 1;
-    const size_t length = std::strlen(line);
-    if (messages.length[index] + length + 1 < capacity || length + sizeof(continuation) >= capacity)
-        return appendDecodedQzssLine(messages, line);
-
-    if (messages.count >= MAX_DECODED_QZSS_MESSAGES)
-        return false;
-    const size_t nextIndex = messages.count++;
-    std::memcpy(messages.text[nextIndex], continuation, sizeof(continuation));
-    messages.length[nextIndex] = sizeof(continuation) - 1;
-    return appendDecodedQzssLine(messages, line);
 }
 
 size_t formatUnsignedDecimal(char *output, size_t capacity, uint64_t value)
@@ -1169,122 +1102,6 @@ bool appendDecodedQzssHex64(DecodedQzssMessages &messages, const char *name, uin
     return appendDecodedQzssLine(messages, line);
 }
 
-bool appendDcrCodeValue(DecodedQzssMessages &messages, const char *name, uint64_t value, QzssDcrCodeTables::Id table)
-{
-    char scratch[192];
-    const char *meaning = QzssDcrCodeTables::lookup(table, value, scratch, sizeof(scratch));
-    return appendDecodedQzssValue(messages, name, value, meaning ? meaning : "未定義コード");
-}
-
-struct DcrArrayField {
-    const char *name;
-    uint8_t offset;
-    uint8_t width;
-    QzssDcrCodeTables::Id table;
-    bool relativeTsunamiArrival = false;
-};
-
-bool formatDcrLocalTime(time_t timestamp, char *output, size_t capacity);
-bool formatDcrRelativeTsunamiArrival(time_t reportEpoch, unsigned dayOffset, unsigned hour, unsigned minute,
-                                     char *output, size_t capacity);
-
-bool appendDcrArrayRecords(DecodedQzssMessages &messages, const uint8_t *frame, const char *name, uint16_t firstBit,
-                           uint8_t stride, uint8_t count, uint8_t recordWidth, const DcrArrayField *fields,
-                           size_t fieldCount, time_t reportEpoch)
-{
-    constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
-    static char line[capacity];
-    static char numberText[21];
-    static char meaningBuffer[192];
-    const size_t nameLength = std::strlen(name);
-    for (uint8_t i = 0; i < count; ++i) {
-        const uint16_t recordBit = firstBit + i * stride;
-        if (recordWidth && getBits64(frame, recordBit, recordWidth) == 0)
-            break;
-
-        int prefixLength = std::snprintf(line, sizeof(line), "%s[%u]=", name, static_cast<unsigned>(i + 1));
-        if (prefixLength < 0 || static_cast<size_t>(prefixLength) >= sizeof(line))
-            return false;
-        size_t position = static_cast<size_t>(prefixLength);
-        for (size_t j = 0; j < fieldCount; ++j) {
-            const DcrArrayField &field = fields[j];
-            if (j) {
-                if (position + 3 >= sizeof(line))
-                    return false;
-                std::memcpy(line + position, "・", 3);
-                position += 3;
-            }
-            const int fieldNameLength = std::snprintf(line + position, sizeof(line) - position, "%s:", field.name);
-            if (fieldNameLength < 0 || static_cast<size_t>(fieldNameLength) >= sizeof(line) - position)
-                return false;
-            position += static_cast<size_t>(fieldNameLength);
-
-            const uint64_t value = getBits64(frame, recordBit + field.offset, field.width);
-            if (field.relativeTsunamiArrival) {
-                char localTime[48] = {};
-                const unsigned dayOffset = static_cast<unsigned>(value >> 11);
-                const unsigned hour = static_cast<unsigned>((value >> 6) & 0x1F);
-                const unsigned minute = static_cast<unsigned>(value & 0x3F);
-                const bool localized = formatDcrRelativeTsunamiArrival(reportEpoch, dayOffset, hour, minute,
-                                                                        localTime, sizeof(localTime));
-                if (!localized && dayOffset <= 1 && hour <= 23 && minute <= 59)
-                    std::snprintf(localTime, sizeof(localTime), "+%u日 %02u:%02u UTC", dayOffset, hour, minute);
-                if (localized || localTime[0]) {
-                    const size_t localTimeLength = std::strlen(localTime);
-                    if (position + localTimeLength >= sizeof(line))
-                        return false;
-                    std::memcpy(line + position, localTime, localTimeLength);
-                    position += localTimeLength;
-                    line[position] = '\0';
-                    continue;
-                }
-            }
-            const char *meaning = field.table == QzssDcrCodeTables::Id::None
-                                      ? nullptr
-                                      : QzssDcrCodeTables::lookup(field.table, value, meaningBuffer, sizeof(meaningBuffer));
-            const size_t numberLength = formatUnsignedDecimal(numberText, sizeof(numberText), value);
-            if (!numberLength)
-                return false;
-            if (meaning) {
-                const size_t meaningLength = std::strlen(meaning);
-                if (position + meaningLength + numberLength + 2 >= sizeof(line))
-                    return false;
-                std::memcpy(line + position, meaning, meaningLength);
-                position += meaningLength;
-                line[position++] = '(';
-                std::memcpy(line + position, numberText, numberLength);
-                position += numberLength;
-                line[position++] = ')';
-            } else if (field.table != QzssDcrCodeTables::Id::None) {
-                constexpr char undefinedCode[] = "未定義コード(";
-                if (position + sizeof(undefinedCode) - 1 + numberLength + 1 >= sizeof(line))
-                    return false;
-                std::memcpy(line + position, undefinedCode, sizeof(undefinedCode) - 1);
-                position += sizeof(undefinedCode) - 1;
-                std::memcpy(line + position, numberText, numberLength);
-                position += numberLength;
-                line[position++] = ')';
-            } else {
-                if (position + numberLength >= sizeof(line))
-                    return false;
-                std::memcpy(line + position, numberText, numberLength);
-                position += numberLength;
-            }
-            line[position] = '\0';
-        }
-        if (!appendDecodedQzssWholeLine(messages, line))
-            return false;
-    }
-    if (count == 0 || (recordWidth && getBits64(frame, firstBit, recordWidth) == 0)) {
-        if (nameLength + sizeof("=なし") >= sizeof(line))
-            return false;
-        std::memcpy(line, name, nameLength);
-        std::memcpy(line + nameLength, "=なし", sizeof("=なし"));
-        return appendDecodedQzssLine(messages, line);
-    }
-    return true;
-}
-
 bool appendDecodedQzssBits(DecodedQzssMessages &messages, const uint8_t *frame, const char *name, uint16_t firstBit,
                             uint8_t bitCount)
 {
@@ -1296,170 +1113,6 @@ bool appendDecodedQzssBits(DecodedQzssMessages &messages, const uint8_t *frame, 
         line[prefix + i] = getBit(frame, firstBit + i) ? '1' : '0';
     line[prefix + bitCount] = '\0';
     return appendDecodedQzssLine(messages, line);
-}
-
-bool appendDcrArrayValues(DecodedQzssMessages &messages, const uint8_t *frame, const char *name, uint16_t firstBit,
-                         uint8_t stride, uint8_t fieldOffset, uint8_t width, uint8_t count,
-                         QzssDcrCodeTables::Id table = QzssDcrCodeTables::Id::None, uint8_t recordWidth = 0)
-{
-    constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
-    // GPS frame decoding is single-threaded; keep its formatting buffers off the loop task stack.
-    static char line[capacity];
-    static char meaningBuffer[192];
-    static char numberText[21];
-    static char valueText[capacity];
-    const size_t nameLength = std::strlen(name);
-    if (nameLength + 1 >= sizeof(line))
-        return false;
-    std::memcpy(line, name, nameLength);
-    line[nameLength] = '=';
-    size_t position = nameLength + 1;
-    bool hasValues = false;
-    for (uint8_t i = 0; i < count; ++i) {
-        const uint16_t recordBit = firstBit + i * stride;
-        if (recordWidth && getBits64(frame, recordBit, recordWidth) == 0)
-            break;
-
-        const uint64_t value = getBits64(frame, recordBit + fieldOffset, width);
-        const char *meaning =
-            table == QzssDcrCodeTables::Id::None ? nullptr : QzssDcrCodeTables::lookup(table, value, meaningBuffer,
-                                                                                       sizeof(meaningBuffer));
-        const size_t numberLength = formatUnsignedDecimal(numberText, sizeof(numberText), value);
-        if (!numberLength)
-            return false;
-
-        size_t length = 0;
-        const char *description = meaning;
-        if (!description && table != QzssDcrCodeTables::Id::None)
-            description = "未定義コード";
-        if (description) {
-            const size_t descriptionLength = std::strlen(description);
-            if (descriptionLength + numberLength + 3 > sizeof(valueText))
-                return false;
-            std::memcpy(valueText + length, description, descriptionLength);
-            length += descriptionLength;
-            valueText[length++] = '(';
-            std::memcpy(valueText + length, numberText, numberLength);
-            length += numberLength;
-            valueText[length++] = ')';
-        } else {
-            if (numberLength >= sizeof(valueText))
-                return false;
-            std::memcpy(valueText, numberText, numberLength);
-            length = numberLength;
-        }
-        valueText[length] = '\0';
-        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line)) {
-            line[position] = '\0';
-            if (!appendDecodedQzssLine(messages, line))
-                return false;
-            constexpr char continuation[] = "(続き)=";
-            if (nameLength + sizeof(continuation) - 1 >= sizeof(line))
-                return false;
-            std::memcpy(line, name, nameLength);
-            std::memcpy(line + nameLength, continuation, sizeof(continuation));
-            position = nameLength + sizeof(continuation) - 1;
-            hasValues = false;
-        }
-        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line))
-            return false;
-        if (hasValues)
-            line[position++] = ',';
-        std::memcpy(line + position, valueText, length);
-        position += length;
-        line[position] = '\0';
-        hasValues = true;
-    }
-    if (!hasValues) {
-        constexpr char noValues[] = "なし";
-        if (nameLength + sizeof(noValues) >= sizeof(line))
-            return false;
-        std::memcpy(line, name, nameLength);
-        line[nameLength] = '=';
-        std::memcpy(line + nameLength + 1, noValues, sizeof(noValues));
-        return appendDecodedQzssLine(messages, line);
-    }
-    return appendDecodedQzssLine(messages, line);
-}
-
-bool appendDcrBitmapRegions(DecodedQzssMessages &messages, const uint8_t *frame, const char *name,
-                            uint16_t firstBit, uint8_t bitCount)
-{
-    constexpr size_t capacity = meshtastic_Constants_DATA_PAYLOAD_LEN;
-    char line[capacity];
-    int prefix = std::snprintf(line, sizeof(line), "%s=", name);
-    if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
-        return false;
-    size_t position = static_cast<size_t>(prefix);
-    bool hasValues = false;
-    for (uint8_t i = 0; i < bitCount; ++i) {
-        if (!getBit(frame, firstBit + i))
-            continue;
-        const uint32_t region = i + 1;
-        char scratch[64];
-        const char *meaning = QzssDcrCodeTables::lookup(QzssDcrCodeTables::Id::EewForecastRegion, region, scratch,
-                                                         sizeof(scratch));
-        char value[96];
-        const int valueLength = meaning ? std::snprintf(value, sizeof(value), "%s(%u)", meaning, region)
-                                        : std::snprintf(value, sizeof(value), "未定義地域(%u)", region);
-        if (valueLength < 0 || static_cast<size_t>(valueLength) >= sizeof(value))
-            return false;
-        const size_t length = static_cast<size_t>(valueLength);
-        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line)) {
-            line[position] = '\0';
-            if (!appendDecodedQzssLine(messages, line))
-                return false;
-            prefix = std::snprintf(line, sizeof(line), "%s(続き)=", name);
-            if (prefix < 0 || static_cast<size_t>(prefix) >= sizeof(line))
-                return false;
-            position = static_cast<size_t>(prefix);
-            hasValues = false;
-        }
-        if (position + length + (hasValues ? 1 : 0) + 1 >= sizeof(line))
-            return false;
-        if (hasValues)
-            line[position++] = ',';
-        std::memcpy(line + position, value, length);
-        position += length;
-        line[position] = '\0';
-        hasValues = true;
-    }
-    if (!hasValues) {
-        std::snprintf(line, sizeof(line), "%s=なし", name);
-        return appendDecodedQzssLine(messages, line);
-    }
-    return appendDecodedQzssLine(messages, line);
-}
-
-bool formatDcrEventLocalTime(time_t reportEpoch, unsigned day, unsigned hour, unsigned minute, char *output,
-                             size_t capacity);
-
-bool appendDcrTimeFields(DecodedQzssMessages &messages, const uint8_t *frame, const char *prefix, uint16_t firstBit,
-                         time_t reportEpoch)
-{
-    const unsigned day = static_cast<unsigned>(getBits(frame, firstBit, 5));
-    const unsigned hour = static_cast<unsigned>(getBits(frame, firstBit + 5, 5));
-    const unsigned minute = static_cast<unsigned>(getBits(frame, firstBit + 10, 6));
-    if (day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
-        char localTime[48];
-        char line[80];
-        const bool localized = reportEpoch &&
-                               formatDcrEventLocalTime(reportEpoch, day, hour, minute, localTime, sizeof(localTime));
-        if (!localized)
-            std::snprintf(localTime, sizeof(localTime), "%02u日 %02u:%02u UTC", day, hour, minute);
-        const int length = std::snprintf(line, sizeof(line), "%s=%s", prefix, localTime);
-        return length >= 0 && static_cast<size_t>(length) < sizeof(line) && appendDecodedQzssLine(messages, line);
-    }
-
-    char name[64];
-    std::snprintf(name, sizeof(name), "%s（日）", prefix);
-    if (!appendDecodedQzssNumber(messages, name, day))
-        return false;
-    std::snprintf(name, sizeof(name), "%s（時）", prefix);
-    if (!appendDecodedQzssNumber(messages, name, hour))
-        return false;
-    std::snprintf(name, sizeof(name), "%s（分）", prefix);
-    return appendDecodedQzssNumber(messages, name, minute);
 }
 
 bool findDcrReportEpoch(unsigned month, unsigned day, unsigned hour, unsigned minute, time_t &reportEpoch)
@@ -1544,36 +1197,18 @@ void formatDcxOnsetDescription(uint32_t onsetWeek, uint32_t onsetTimeOfWeek, cha
         const uint32_t weekday = minuteOfWeek / 1440;
         const uint32_t minuteOfDay = minuteOfWeek % 1440;
         if (!formatDcxOnsetLocalTime(onsetWeek, onsetTimeOfWeek, output, capacity))
-            std::snprintf(output, capacity, "%s曜 %02u:%02u UTC", weekdays[weekday],
+            std::snprintf(output, capacity, "%s%s曜 %02u:%02u UTC", onsetWeek ? "来週" : "今週", weekdays[weekday],
                           static_cast<unsigned>(minuteOfDay / 60), static_cast<unsigned>(minuteOfDay % 60));
     } else {
         std::snprintf(output, capacity, "未使用コード");
     }
 }
 
-bool formatDcrRelativeTsunamiArrival(time_t reportEpoch, unsigned dayOffset, unsigned hour, unsigned minute,
-                                     char *output, size_t capacity)
-{
-    if (!reportEpoch || dayOffset > 1 || hour > 23 || minute > 59)
-        return false;
-    const struct tm *reportUtcValue = gmtime(&reportEpoch);
-    if (!reportUtcValue)
-        return false;
-    struct tm arrivalUtc = *reportUtcValue;
-    arrivalUtc.tm_mday += static_cast<int>(dayOffset);
-    arrivalUtc.tm_hour = static_cast<int>(hour);
-    arrivalUtc.tm_min = static_cast<int>(minute);
-    arrivalUtc.tm_sec = 0;
-    const time_t arrivalEpoch = gm_mktime(&arrivalUtc);
-    return arrivalEpoch && formatDcrLocalTime(arrivalEpoch, output, capacity);
-}
-
-bool formatDcrEventLocalTime(time_t reportEpoch, unsigned day, unsigned hour, unsigned minute, char *output,
-                             size_t capacity)
+time_t findDcrEventEpoch(time_t reportEpoch, unsigned day, unsigned hour, unsigned minute)
 {
     const struct tm *reportUtcValue = gmtime(&reportEpoch);
     if (!reportUtcValue)
-        return false;
+        return 0;
     const struct tm reportUtc = *reportUtcValue;
     time_t eventEpoch = 0;
     uint64_t closestDistance = UINT64_MAX;
@@ -1609,273 +1244,757 @@ bool formatDcrEventLocalTime(time_t reportEpoch, unsigned day, unsigned hour, un
             eventEpoch = candidate;
         }
     }
-    return eventEpoch && formatDcrLocalTime(eventEpoch, output, capacity);
+    return eventEpoch;
 }
 
-const char *dcrActivityTimeAmbiguityText(uint32_t code)
-{
-    static const char *const meanings[] = {"なし", "1分", "1秒", "10分", "1時間", "1日", "1か月", "1年"};
-    return code < sizeof(meanings) / sizeof(meanings[0]) ? meanings[code] : nullptr;
-}
+using DcrCode = QzssDcrCodeTables::Id;
 
-bool appendDcrNankaiText(DecodedQzssMessages &messages, const uint8_t *frame)
+constexpr size_t DCR_CHAT_CAPACITY =
+#if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
+    MAX_MESSAGE_SIZE;
+#else
+    meshtastic_Constants_DATA_PAYLOAD_LEN;
+#endif
+static_assert(DCR_CHAT_CAPACITY <= meshtastic_Constants_DATA_PAYLOAD_LEN);
+constexpr size_t DCR_CHAT_PART_NUMBER_RESERVE = 8;
+constexpr time_t JST_OFFSET = 9 * SEC_PER_HOUR;
+
+class DcrChat
 {
-    char text[19] = {};
-    for (uint8_t i = 0; i < 18; ++i) {
-        const uint8_t byte = static_cast<uint8_t>(getBits(frame, 57 + i * 8, 8));
-        if (byte == 0)
-            break;
-        text[i] = static_cast<char>(byte);
-    }
-    sanitizeUtf8(text, sizeof(text));
-    for (char &character : text) {
-        if (character == '\0')
-            break;
-        if (character == '\r' || character == '\n')
-            character = '/';
+  public:
+    DcrChat(DecodedQzssMessages &messages, const char *header) : messages(messages), header(header)
+    {
+        messages.count = 0;
+        startMessage();
     }
 
-    char line[128];
-    const int prefixLength = std::snprintf(line, sizeof(line), "見出し=");
-    if (prefixLength < 0 || static_cast<size_t>(prefixLength) + std::strlen(text) >= sizeof(line))
-        return false;
-    std::memcpy(line + prefixLength, text, std::strlen(text) + 1);
-    return appendDecodedQzssLine(messages, line);
-}
+    size_t lineCapacity() const { return DCR_CHAT_CAPACITY - std::strlen(header) - DCR_CHAT_PART_NUMBER_RESERVE - 3; }
 
-bool appendDcrLatitudeLongitude(DecodedQzssMessages &messages, const uint8_t *frame, uint16_t firstBit)
-{
-    if (!appendDecodedQzssNumber(messages, "緯度南北（0=北、1=南）", getBits(frame, firstBit, 1)) ||
-        !appendDecodedQzssNumber(messages, "緯度 度", getBits(frame, firstBit + 1, 7)) ||
-        !appendDecodedQzssNumber(messages, "緯度 分", getBits(frame, firstBit + 8, 6)) ||
-        !appendDecodedQzssNumber(messages, "緯度 秒", getBits(frame, firstBit + 14, 6)) ||
-        !appendDecodedQzssNumber(messages, "経度東西（0=東、1=西）", getBits(frame, firstBit + 20, 1)) ||
-        !appendDecodedQzssNumber(messages, "経度 度", getBits(frame, firstBit + 21, 8)) ||
-        !appendDecodedQzssNumber(messages, "経度 分", getBits(frame, firstBit + 29, 6)))
-        return false;
-    return appendDecodedQzssNumber(messages, "経度 秒", getBits(frame, firstBit + 35, 6));
-}
-
-bool appendDcrReportHeader(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard, time_t &reportEpoch)
-{
-    const uint32_t reportClass = getBits(frame, 14, 3);
-    const uint32_t reportedAt = getBits(frame, 21, 20);
-    const uint32_t infoType = getBits(frame, 41, 2);
-    const char *reportClassText = dcrReportClassText(reportClass);
-    const char *hazardText = dcrHazardText(hazard);
-    reportEpoch = 0;
-
-    if (!appendDecodedQzssValue(messages, "区分", reportClass, reportClassText) ||
-        !appendDecodedQzssValue(messages, "災害", hazard, hazardText) ||
-        !appendDecodedQzssValue(messages, "情報", infoType, dcrInformationTypeText(hazard, infoType)))
-        return false;
-
-    const unsigned month = static_cast<unsigned>((reportedAt >> 16) & 0x0F);
-    const unsigned day = static_cast<unsigned>((reportedAt >> 11) & 0x1F);
-    const unsigned hour = static_cast<unsigned>((reportedAt >> 6) & 0x1F);
-    const unsigned minute = static_cast<unsigned>(reportedAt & 0x3F);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
-        char timeText[64];
-        char line[80];
-        int length;
-        if (!findDcrReportEpoch(month, day, hour, minute, reportEpoch) ||
-            !formatDcrLocalTime(reportEpoch, timeText, sizeof(timeText)))
-            length = std::snprintf(line, sizeof(line), "発表=%02u/%02u %02u:%02u UTC", month, day, hour, minute);
-        else
-            length = std::snprintf(line, sizeof(line), "発表=%s", timeText);
+    template <typename... Args> bool append(const char *format, Args... args)
+    {
+        char line[DCR_CHAT_CAPACITY];
+        const int length = std::snprintf(line, sizeof(line), format, args...);
         if (length < 0 || static_cast<size_t>(length) >= sizeof(line))
             return false;
-        if (!appendDecodedQzssLine(messages, line))
+        if (length == 0)
+            return true;
+        if (static_cast<size_t>(length) > lineCapacity())
             return false;
-    } else if (!appendDecodedQzssNumber(messages, "発表月", month) || !appendDecodedQzssNumber(messages, "発表日", day) ||
-               !appendDecodedQzssNumber(messages, "発表時", hour) || !appendDecodedQzssNumber(messages, "発表分", minute)) {
-        return false;
+
+        size_t index = messages.count - 1;
+        if (messages.length[index] + length + DCR_CHAT_PART_NUMBER_RESERVE + 2 >= DCR_CHAT_CAPACITY) {
+            if (messages.count == MAX_DECODED_QZSS_MESSAGES)
+                return false;
+            startMessage();
+            index = messages.count - 1;
+        }
+
+        char *tail = messages.text[index] + messages.length[index];
+        *tail++ = '\n';
+        std::memcpy(tail, line, length + 1);
+        messages.length[index] += length + 1;
+        return true;
     }
-    if (hazard == 1) {
-        return appendDcrCodeValue(messages, "長周期地震動下限", getBits(frame, 47, 3),
-                                  QzssDcrCodeTables::Id::LongPeriodGroundMotionLowerLimit) &&
-               appendDcrCodeValue(messages, "長周期地震動上限", getBits(frame, 50, 3),
-                                  QzssDcrCodeTables::Id::LongPeriodGroundMotionUpperLimit);
+
+    bool finish()
+    {
+        if (messages.count < 2)
+            return true;
+
+        const size_t headerLength = std::strlen(header);
+        for (uint8_t i = 0; i < messages.count; ++i) {
+            char part[12];
+            const int length = std::snprintf(part, sizeof(part), "(%u/%u)", static_cast<unsigned>(i + 1),
+                                             static_cast<unsigned>(messages.count));
+            if (length < 0 || static_cast<size_t>(length) >= sizeof(part))
+                return false;
+
+            char *text = messages.text[i];
+            const size_t partLength = static_cast<size_t>(length);
+            if (i == 0) {
+                const size_t suffixLength = partLength + 1;
+                if (messages.length[i] + suffixLength >= DCR_CHAT_CAPACITY)
+                    return false;
+                std::memmove(text + headerLength + suffixLength, text + headerLength,
+                             messages.length[i] - headerLength + 1);
+                text[headerLength] = ' ';
+                std::memcpy(text + headerLength + 1, part, partLength);
+                messages.length[i] += static_cast<uint16_t>(suffixLength);
+            } else {
+                if (messages.length[i] < headerLength || std::memcmp(text, header, headerLength) != 0)
+                    return false;
+                const size_t bodyLength = messages.length[i] - headerLength;
+                std::memmove(text + partLength, text + headerLength, bodyLength + 1);
+                std::memcpy(text, part, partLength);
+                messages.length[i] = static_cast<uint16_t>(partLength + bodyLength);
+            }
+        }
+        return true;
+    }
+
+  private:
+    void startMessage()
+    {
+        const size_t index = messages.count++;
+        std::strcpy(messages.text[index], header);
+        messages.length[index] = std::strlen(header);
+    }
+
+    DecodedQzssMessages &messages;
+    const char *header;
+};
+
+const char *dcrName(DcrCode table, uint64_t code, const char *fallback)
+{
+    const char *name = QzssDcrCodeTables::lookup(table, code, nullptr, 0);
+    return name ? name : fallback;
+}
+
+template <typename Select> bool appendQzssRegions(DcrChat &chat, const char *prefix, unsigned count, Select select)
+{
+    char line[DCR_CHAT_CAPACITY];
+    const size_t prefixLength = std::strlen(prefix);
+    std::memcpy(line, prefix, prefixLength);
+    size_t length = prefixLength;
+    for (unsigned i = 0; i < count; ++i) {
+        const char *region = select(i);
+        if (!region)
+            continue;
+        const size_t regionLength = std::strlen(region);
+        if (length > prefixLength && length + 1 + regionLength > chat.lineCapacity()) {
+            line[length] = '\0';
+            if (!chat.append("%s", line))
+                return false;
+            length = prefixLength;
+        }
+        if (length > prefixLength)
+            line[length++] = ' ';
+        if (length + regionLength > chat.lineCapacity())
+            return false;
+        std::memcpy(line + length, region, regionLength);
+        length += regionLength;
+    }
+    line[length] = '\0';
+    return length == prefixLength || chat.append("%s", line);
+}
+
+template <typename Select> bool appendDcrRegions(DcrChat &chat, const char *prefix, DcrCode table, unsigned count, Select select)
+{
+    return appendQzssRegions(chat, prefix, count, [&](unsigned i) {
+        const uint64_t code = select(i);
+        return code ? dcrName(table, code, "地域名不明") : nullptr;
+    });
+}
+
+const char *dcrComment(uint32_t code)
+{
+    switch (code) {
+    case 104:
+    case 213:
+        return "海面変動が続く見込み。海水浴・磯釣り等に注意。";
+    case 105:
+    case 214:
+        return "海面変動が続く見込み。磯釣り等に注意。";
+    case 107:
+        return "現在、津波警報・注意報の発表なし。";
+    case 109:
+        return "満潮と重なると津波が高くなる。厳重警戒。";
+    case 110:
+        return "満潮と重なると津波が高くなる。十分注意。";
+    case 111:
+        return "場所により観測値を超える津波が到達したおそれ。";
+    case 113:
+        return "沖合観測から、一部沿岸には津波が到達したと推定。";
+    case 114:
+        return "潮位変化から最大波の観測まで数時間以上かかることがあります。";
+    case 121:
+    case 122:
+        return "沿岸・川沿いは直ちに高台などへ。解除まで戻らない。";
+    case 132:
+        return "場所により予想を超える高さの津波のおそれ。";
+    case 142:
+        return "沖合で高い津波を観測。大津波警報・津波警報に切替。";
+    case 143:
+        return "沖合で高い津波を観測。大津波警報・津波警報を変更。";
+    case 144:
+        return "沖合で高い津波を観測。大津波警報に切替。";
+    case 145:
+        return "沖合で高い津波を観測。大津波警報を変更。";
+    case 146:
+        return "沖合で高い津波を観測。津波警報に切替。";
+    case 147:
+        return "沖合で高い津波を観測。津波警報を変更。";
+    case 148:
+        return "沖合で高い津波を観測。予想される津波の高さを変更。";
+    case 201:
+        return "強い揺れに警戒。";
+    case 211:
+        return "津波警報等を発表中。";
+    case 212:
+        return "日本沿岸で若干の海面変動のおそれ。被害の心配なし。";
+    case 215:
+        return "この地震による津波の心配なし。";
+    case 227:
+        return "震源付近で小さな津波のおそれ。被害の心配なし。";
+    case 228:
+        return "この規模で震源が浅い海域の場合、津波のおそれ。";
+    case 229:
+        return "日本への津波は調査中。";
+    case 242:
+        return "緊急地震速報発表済み。観測最大震度2。";
+    case 243:
+        return "緊急地震速報発表済み。観測最大震度1。";
+    case 244:
+        return "緊急地震速報発表済み。震度1以上の観測なし。";
+    case 245:
+        return "緊急地震速報発表済み。強い揺れの観測なし。";
+    default:
+        return dcrName(DcrCode::NotificationOnDisasterPrevention, code, "防災コメント内容不明");
+    }
+}
+
+bool appendDcrComments(DcrChat &chat, const uint8_t *frame, bool warningEnded)
+{
+    const char *comments[3] = {};
+    const char *evacuation = nullptr;
+    for (unsigned i = 0; i < 3; ++i) {
+        const uint32_t code = getBits(frame, 53 + i * 9, 9);
+        if (code == 121 || code == 122)
+            evacuation = warningEnded ? nullptr : dcrComment(code);
+        else if (code && !(warningEnded && code == 149))
+            comments[i] = dcrComment(code);
+    }
+    if (evacuation && !chat.append("%s", evacuation))
+        return false;
+    for (unsigned i = 0; i < 3; ++i) {
+        const char *comment = comments[i];
+        if (!comment || (evacuation && std::strcmp(comment, "ただちに避難してください。") == 0) ||
+            (i > 0 && comments[0] && std::strcmp(comment, comments[0]) == 0) ||
+            (i > 1 && comments[1] && std::strcmp(comment, comments[1]) == 0))
+            continue;
+        if (!chat.append("%s", comment))
+            return false;
     }
     return true;
 }
 
-bool appendDcrCategoryFields(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard, time_t reportEpoch)
+bool formatDcrJst(time_t epoch, char *out, size_t capacity, const char *format)
 {
-    char label[128];
-    switch (hazard) {
-    case 1: {
-        for (unsigned i = 0; i < 3; ++i) {
-            std::snprintf(label, sizeof(label), "防災情報コード%u", i + 1);
-            if (!appendDcrCodeValue(messages, label, getBits(frame, 53 + i * 9, 9),
-                                    QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
+    const time_t jst = epoch + JST_OFFSET;
+    const struct tm *time = gmtime(&jst);
+    return time && strftime(out, capacity, format, time) != 0;
+}
+
+time_t dcrEventTime(const uint8_t *frame, unsigned firstBit, time_t issued, char *out, size_t capacity)
+{
+    const unsigned day = getBits(frame, firstBit, 5);
+    const unsigned hour = getBits(frame, firstBit + 5, 5);
+    const unsigned minute = getBits(frame, firstBit + 10, 6);
+    *out = '\0';
+    if (!day || hour > 23 || minute > 59)
+        return 0;
+    const time_t event = issued ? findDcrEventEpoch(issued, day, hour, minute) : 0;
+    if (!event || !formatDcrJst(event, out, capacity, "%m/%d %H:%M JST"))
+        std::snprintf(out, capacity, "%u日 %02u:%02u UTC", day, hour, minute);
+    return event;
+}
+
+bool appendDcrRange(DcrChat &chat, const char *label, const char *prefix, const char *lower, const char *upper)
+{
+    if (lower && upper && std::strcmp(lower, upper) != 0) {
+        if (std::strncmp(upper, prefix, std::strlen(prefix)) == 0)
+            return chat.append("%s%s%s〜%s", label, prefix, lower + std::strlen(prefix), upper + std::strlen(prefix));
+        return chat.append("%s%s%s", label, lower, upper);
+    }
+    if (lower && !upper)
+        return chat.append("%s%s（下限）", label, lower);
+    if (!lower && upper)
+        return chat.append("%s%s（上限）", label, upper);
+    return !lower || chat.append("%s%s", label, lower);
+}
+
+bool formatDcrCoordinates(const uint8_t *frame, unsigned bit, char *out, size_t capacity)
+{
+    const unsigned latDegrees = getBits(frame, bit + 1, 7);
+    const unsigned latMinutes = getBits(frame, bit + 8, 6);
+    const unsigned latSeconds = getBits(frame, bit + 14, 6);
+    const unsigned lonDegrees = getBits(frame, bit + 21, 8);
+    const unsigned lonMinutes = getBits(frame, bit + 29, 6);
+    const unsigned lonSeconds = getBits(frame, bit + 35, 6);
+    if (latDegrees >= 90 || lonDegrees >= 180 || latMinutes >= 60 || lonMinutes >= 60 || latSeconds >= 60 || lonSeconds >= 60)
+        return false;
+    const unsigned lat = (latDegrees * 3600 + latMinutes * 60 + latSeconds + 18) / 36;
+    const unsigned lon = (lonDegrees * 3600 + lonMinutes * 60 + lonSeconds + 18) / 36;
+    std::snprintf(out, capacity, "%s%u.%02u° %s%u.%02u°", getBit(frame, bit) ? "南緯" : "北緯", lat / 100, lat % 100,
+                  getBit(frame, bit + 20) ? "西経" : "東経", lon / 100, lon % 100);
+    return true;
+}
+
+bool appendDcrEarthquake(DcrChat &chat, const uint8_t *frame, uint32_t hazard, time_t issued, bool cancelled)
+{
+    if (hazard == 1) {
+        const uint32_t intensityLower = getBits(frame, 122, 4);
+        const uint32_t intensityUpper = getBits(frame, 126, 4);
+        const uint32_t motionLower = getBits(frame, 47, 3);
+        const uint32_t motionUpper = getBits(frame, 50, 3);
+        if (!cancelled) {
+            const char *minIntensity =
+                intensityLower <= 10 ? dcrName(DcrCode::SeismicIntensityLowerLimit, intensityLower, nullptr) : nullptr;
+            const char *maxIntensity = intensityUpper <= (minIntensity ? 11u : 10u)
+                                           ? dcrName(DcrCode::SeismicIntensityUpperLimit, intensityUpper, nullptr)
+                                           : nullptr;
+            const char *minMotion = motionLower && motionLower <= 5
+                                        ? dcrName(DcrCode::LongPeriodGroundMotionLowerLimit, motionLower, nullptr)
+                                        : nullptr;
+            const char *maxMotion = motionUpper && motionUpper <= (minMotion ? 6u : 5u)
+                                        ? dcrName(DcrCode::LongPeriodGroundMotionUpperLimit, motionUpper, nullptr)
+                                        : nullptr;
+            if (!appendDcrComments(chat, frame, false) || !appendDcrRange(chat, "予測", "震度", minIntensity, maxIntensity) ||
+                !appendDcrRange(chat, "予測", "長周期地震動階級", minMotion, maxMotion))
                 return false;
         }
-        if (!appendDcrTimeFields(messages, frame, "地震発生時刻", 80, reportEpoch) ||
-            !appendDcrCodeValue(messages, "震源深さ", getBits(frame, 96, 9),
-                                QzssDcrCodeTables::Id::DepthOfHypocenter) ||
-            !appendDcrCodeValue(messages, "マグニチュード", getBits(frame, 105, 7),
-                                QzssDcrCodeTables::Id::EewMagnitude) ||
-            !appendDcrCodeValue(messages, "震央・震源", getBits(frame, 112, 10),
-                                QzssDcrCodeTables::Id::EpicenterAndHypocenter) ||
-            !appendDcrCodeValue(messages, "震度下限", getBits(frame, 122, 4),
-                                QzssDcrCodeTables::Id::SeismicIntensityLowerLimit) ||
-            !appendDcrCodeValue(messages, "震度上限", getBits(frame, 126, 4),
-                                QzssDcrCodeTables::Id::SeismicIntensityUpperLimit) ||
-            !appendDcrBitmapRegions(messages, frame, "予測地域", 130, 80))
-            return false;
+        return appendDcrRegions(chat, "対象 ", DcrCode::EewForecastRegion, 80,
+                                [&](unsigned i) { return getBit(frame, 130 + i) ? i + 1 : 0; });
+    }
+
+    char event[40];
+    dcrEventTime(frame, hazard == 2 ? 80 : 53, issued, event, sizeof(event));
+    if (*event && !chat.append("発生 %s", event))
+        return false;
+    if (cancelled)
+        return true;
+
+    if (hazard == 3) {
+        for (unsigned intensity = 7; intensity; --intensity) {
+            char label[32];
+            std::snprintf(label, sizeof(label), "震度%s ", dcrName(DcrCode::SeismicIntensity, intensity, "不明"));
+            if (!appendDcrRegions(chat, label, DcrCode::Prefecture, 16, [&](unsigned i) {
+                    const unsigned bit = 69 + i * 9;
+                    return getBits(frame, bit, 3) == intensity ? getBits(frame, bit + 3, 6) : 0;
+                }))
+                return false;
+        }
         return true;
     }
-    case 2:
-        for (unsigned i = 0; i < 3; ++i) {
-            std::snprintf(label, sizeof(label), "防災情報コード%u", i + 1);
-            if (!appendDcrCodeValue(messages, label, getBits(frame, 53 + i * 9, 9),
-                                    QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
+
+    const uint32_t epicenterCode = getBits(frame, 112, 10);
+    const char *epicenter = epicenterCode ? dcrName(DcrCode::EpicenterAndHypocenter, epicenterCode, nullptr) : nullptr;
+    char coordinates[48];
+    if (!epicenter && getBits64(frame, 122, 41) && formatDcrCoordinates(frame, 122, coordinates, sizeof(coordinates)))
+        epicenter = coordinates;
+    char magnitudeBuffer[24];
+    char depthBuffer[24];
+    const char *magnitude =
+        QzssDcrCodeTables::lookup(DcrCode::HypocenterMagnitude, getBits(frame, 105, 7), magnitudeBuffer, sizeof(magnitudeBuffer));
+    const char *depth =
+        QzssDcrCodeTables::lookup(DcrCode::DepthOfHypocenter, getBits(frame, 96, 9), depthBuffer, sizeof(depthBuffer));
+    return chat.append("%s%s%s%s%s", epicenter ? epicenter : "", magnitude ? " M" : "", magnitude ? magnitude : "",
+                       depth ? " 深さ" : "", depth ? depth : "") &&
+           appendDcrComments(chat, frame, false);
+}
+
+const char *dcrTsunamiWarning(uint32_t code)
+{
+    if (code == 2)
+        return "津波警報解除";
+    if (code == 5)
+        return "大津波警報";
+    return dcrName(DcrCode::TsunamiWarningCode, code, "津波情報（警報種別不明）");
+}
+
+uint32_t dcrSingleTsunamiRegion(const uint8_t *frame)
+{
+    const uint32_t region = getBits(frame, 100, 10);
+    for (unsigned i = 1; i < 5; ++i) {
+        if (getBits(frame, 100 + i * 26, 10))
+            return 0;
+    }
+    return region;
+}
+
+bool appendDcrTsunami(DcrChat &chat, const uint8_t *frame, uint32_t hazard, time_t issued, bool cancelled, bool regionInTitle)
+{
+    const bool domestic = hazard == 5;
+    const uint32_t warning = getBits(frame, 80, 4);
+    const bool warningEnded = cancelled || (domestic && (warning == 1 || warning == 2));
+    if (!cancelled && domestic && !appendDcrComments(chat, frame, warningEnded))
+        return false;
+    if (!domestic && !chat.append("%s", dcrName(DcrCode::TsunamigenicPotential, getBits(frame, 53, 3), "津波発生の可能性不明")))
+        return false;
+
+    const unsigned heightWidth = domestic ? 4 : 9;
+    const unsigned regionWidth = domestic ? 10 : 7;
+    for (unsigned i = 0; i < 5; ++i) {
+        const unsigned bit = domestic ? 84 + i * 26 : 56 + i * 28;
+        const uint32_t region = getBits(frame, bit + 12 + heightWidth, regionWidth);
+        if (!region)
+            continue;
+        const char *name =
+            regionInTitle ? ""
+                          : dcrName(domestic ? DcrCode::TsunamiForecastRegion : DcrCode::CoastalRegion, region, "対象地域不明");
+        if (warningEnded) {
+            if (!chat.append("%s", name))
                 return false;
+            continue;
         }
-        return appendDcrTimeFields(messages, frame, "地震発生時刻", 80, reportEpoch) &&
-               appendDcrCodeValue(messages, "震源深さ", getBits(frame, 96, 9),
-                                  QzssDcrCodeTables::Id::DepthOfHypocenter) &&
-               appendDcrCodeValue(messages, "マグニチュード", getBits(frame, 105, 7),
-                                  QzssDcrCodeTables::Id::HypocenterMagnitude) &&
-               appendDcrCodeValue(messages, "震央・震源", getBits(frame, 112, 10),
-                                  QzssDcrCodeTables::Id::EpicenterAndHypocenter) &&
-               appendDcrLatitudeLongitude(messages, frame, 122);
-    case 3: {
-        static constexpr DcrArrayField fields[] = {
-            {"震度", 0, 3, QzssDcrCodeTables::Id::SeismicIntensity},
-            {"都道府県", 3, 6, QzssDcrCodeTables::Id::Prefecture},
-        };
-        if (!appendDcrTimeFields(messages, frame, "地震発生時刻", 53, reportEpoch))
+
+        const unsigned offset = getBit(frame, bit);
+        const unsigned hour = getBits(frame, bit + 1, 5);
+        const unsigned minute = getBits(frame, bit + 6, 6);
+        char arrival[48] = {};
+        if (hour == 31 && minute == 63) {
+            std::snprintf(arrival, sizeof(arrival), "%s", domestic ? "到達済み" : "到達済み、または時刻不明");
+        } else if (hour <= 23 && minute <= 59) {
+            char time[28];
+            const time_t arrivalEpoch =
+                issued + offset * SEC_PER_DAY + hour * SEC_PER_HOUR + minute * SEC_PER_MIN - (issued % SEC_PER_DAY);
+            const bool sameDay = (arrivalEpoch + JST_OFFSET) / SEC_PER_DAY == (issued + JST_OFFSET) / SEC_PER_DAY;
+            if (!issued || !formatDcrJst(arrivalEpoch, time, sizeof(time), sameDay ? "%H:%M" : "%m/%d %H:%M"))
+                std::snprintf(time, sizeof(time), "%s%02u:%02u UTC", offset ? "翌日 " : "当日 ", hour, minute);
+            std::snprintf(arrival, sizeof(arrival), "%s到達予想", time);
+        }
+
+        const uint32_t heightCode = getBits(frame, bit + 12, heightWidth);
+        const char *height =
+            dcrName(domestic ? DcrCode::TsunamiHeight : DcrCode::NorthwestPacificTsunamiHeight, heightCode, "不明");
+        if (domestic && heightCode == 13)
+            height = nullptr;
+        else if (!domestic && heightCode == 508)
+            height = "10m超";
+        if (!chat.append("%s%s%s%s%s", name, *name && *arrival ? " " : "", arrival,
+                         height ? (*name || *arrival ? "／高さ" : "高さ") : "", height ? height : ""))
             return false;
-        if (!appendDcrArrayRecords(messages, frame, "震度・都道府県", 69, 9, 16, 9, fields,
-                                   sizeof(fields) / sizeof(fields[0]), reportEpoch))
-            return false;
+    }
+    return true;
+}
+
+const char *dcrNankaiStatus(uint32_t code)
+{
+    if (code >= 1 && code <= 3)
+        return "調査中";
+    return dcrName(DcrCode::InformationSerialCode, code, "区分不明");
+}
+
+bool appendDcrNankai(DcrChat &chat, const uint8_t *frame, bool training)
+{
+    constexpr unsigned PAGE_BYTES = 18;
+    constexpr unsigned MAX_PAGES = 63;
+    struct NankaiPages {
+        uint64_t key = 0;
+        uint64_t received = 0;
+        uint32_t started = 0;
+        char text[MAX_PAGES][PAGE_BYTES];
+    };
+    static NankaiPages pending[2];
+    NankaiPages &pages = pending[training ? 1 : 0];
+    const unsigned page = getBits(frame, 201, 6);
+    const unsigned total = getBits(frame, 207, 6);
+    if (!page || page > total)
         return true;
+
+    const uint64_t key = (getBits64(frame, 14, 43) << 6) | total;
+    const bool first = pages.key != key || Throttle::hasElapsed(pages.started, SEC_PER_DAY * 1000);
+    if (first) {
+        pages.key = key;
+        pages.received = 0;
+        pages.started = Time::getMillis();
     }
-    case 4: {
-        const uint32_t serial = getBits(frame, 53, 4);
-        if (!appendDcrCodeValue(messages, "南海トラフ情報番号", serial,
-                                QzssDcrCodeTables::Id::InformationSerialCode) ||
-            !appendDcrNankaiText(messages, frame))
+    const uint64_t pageMask = uint64_t{1} << (page - 1);
+    if (pages.received & pageMask)
+        return false;
+    pages.received |= pageMask;
+    for (unsigned i = 0; i < PAGE_BYTES; ++i)
+        pages.text[page - 1][i] = static_cast<char>(getBits(frame, 57 + i * 8, 8));
+    if (pages.received != (uint64_t{1} << total) - 1)
+        return first;
+
+    static char text[MAX_PAGES * PAGE_BYTES + 1];
+    size_t size = 0;
+    for (unsigned i = 0; i < total; ++i) {
+        const size_t bytes = strnlen(pages.text[i], PAGE_BYTES);
+        std::memcpy(text + size, pages.text[i], bytes);
+        size += bytes;
+    }
+    text[size] = '\0';
+    sanitizeUtf8(text, sizeof(text));
+    for (char *c = text; *c; ++c) {
+        if (*c == '\r' || *c == '\n')
+            *c = ' ';
+    }
+    const char *start = text;
+    size = std::strlen(text);
+    while (size) {
+        size_t bytes = size > chat.lineCapacity() ? chat.lineCapacity() : size;
+        while ((static_cast<uint8_t>(start[bytes]) & 0xc0) == 0x80)
+            --bytes;
+        if (!chat.append("%.*s", static_cast<int>(bytes), start))
             return false;
-        return appendDecodedQzssNumber(messages, "ページ番号", getBits(frame, 201, 6)) &&
-               appendDecodedQzssNumber(messages, "総ページ数", getBits(frame, 207, 6));
+        start += bytes;
+        size -= bytes;
     }
-    case 5: {
-        static constexpr DcrArrayField fields[] = {
-            {"到達時刻", 0, 12, QzssDcrCodeTables::Id::None, true},
-            {"津波高さ", 12, 4, QzssDcrCodeTables::Id::TsunamiHeight},
-            {"津波予報区", 16, 10, QzssDcrCodeTables::Id::TsunamiForecastRegion},
-        };
-        for (unsigned i = 0; i < 3; ++i) {
-            std::snprintf(label, sizeof(label), "防災情報コード%u", i + 1);
-            if (!appendDcrCodeValue(messages, label, getBits(frame, 53 + i * 9, 9),
-                                    QzssDcrCodeTables::Id::NotificationOnDisasterPrevention))
-                return false;
+    return true;
+}
+
+bool appendDcrVolcano(DcrChat &chat, const uint8_t *frame, time_t issued, bool cancelled)
+{
+    const uint32_t ambiguity = getBits(frame, 50, 3);
+    if (!cancelled && ambiguity <= 5) {
+        char event[48] = {};
+        if (ambiguity <= 3) {
+            dcrEventTime(frame, 53, issued, event, sizeof(event));
+        } else {
+            const unsigned day = getBits(frame, 53, 5);
+            const unsigned hour = getBits(frame, 58, 5);
+            if (day && ambiguity == 5)
+                std::snprintf(event, sizeof(event), "%u日 UTC", day);
+            else if (day && hour <= 23) {
+                const time_t time = issued ? findDcrEventEpoch(issued, day, hour, 0) : 0;
+                char local[24];
+                if (time && formatDcrJst(time, local, sizeof(local), "%m/%d %H"))
+                    std::snprintf(event, sizeof(event), "%s時 JST", local);
+                else
+                    std::snprintf(event, sizeof(event), "%u日 %u時 UTC", day, hour);
+            }
         }
-        if (!appendDcrCodeValue(messages, "津波警報", getBits(frame, 80, 4),
-                                QzssDcrCodeTables::Id::TsunamiWarningCode))
+        if (*event && !chat.append("活動 %s%s", event, ambiguity ? "ごろ" : ""))
             return false;
-        return appendDcrArrayRecords(messages, frame, "津波到達予報", 84, 26, 5, 26, fields,
-                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
-    case 6: {
-        static constexpr DcrArrayField fields[] = {
-            {"到達時刻", 0, 12, QzssDcrCodeTables::Id::None, true},
-            {"津波高さ", 12, 9, QzssDcrCodeTables::Id::NorthwestPacificTsunamiHeight},
-            {"沿岸地域", 21, 7, QzssDcrCodeTables::Id::CoastalRegion},
-        };
-        if (!appendDcrCodeValue(messages, "津波発生可能性", getBits(frame, 53, 3),
-                                QzssDcrCodeTables::Id::TsunamigenicPotential))
+    return appendDcrRegions(chat, "対象 ", DcrCode::LocalGovernment, 5,
+                            [&](unsigned i) { return getBits(frame, 88 + i * 23, 23); });
+}
+
+bool appendDcrAshFall(DcrChat &chat, const uint8_t *frame, time_t issued, bool cancelled)
+{
+    char event[40];
+    const time_t activity = dcrEventTime(frame, 53, issued, event, sizeof(event));
+    for (unsigned i = 0; i < 4; ++i) {
+        const unsigned bit = 83 + i * 29;
+        const uint32_t region = getBits(frame, bit + 6, 23);
+        if (!region)
+            continue;
+        const char *name = dcrName(DcrCode::LocalGovernment, region, "対象地域不明");
+        if (cancelled) {
+            if (!chat.append("%s", name))
+                return false;
+            continue;
+        }
+        const unsigned hours = getBits(frame, bit, 3);
+        char time[40] = {};
+        if (hours >= 1 && hours <= 6) {
+            char local[24];
+            if (activity && formatDcrJst(activity + hours * SEC_PER_HOUR, local, sizeof(local), "%m/%d %H:%M"))
+                std::snprintf(time, sizeof(time), "%s JSTごろ", local);
+            else
+                std::snprintf(time, sizeof(time), "火山活動から%u時間後", hours);
+        }
+        if (!chat.append("%s %s%s%s", name, dcrName(DcrCode::AshFallWarningCode, getBits(frame, bit + 3, 3), "降灰内容不明"),
+                         *time ? "／" : "", time))
             return false;
-        return appendDcrArrayRecords(messages, frame, "津波到達情報", 56, 28, 5, 28, fields,
-                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
-    case 8:
-        if (!appendDecodedQzssValue(messages, "活動時刻の曖昧さ", getBits(frame, 50, 3),
-                                    dcrActivityTimeAmbiguityText(getBits(frame, 50, 3))) ||
-            !appendDcrTimeFields(messages, frame, "火山活動時刻", 53, reportEpoch) ||
-            !appendDcrCodeValue(messages, "火山警報", getBits(frame, 69, 7),
-                                QzssDcrCodeTables::Id::VolcanicWarningCode) ||
-            !appendDcrCodeValue(messages, "火山名", getBits(frame, 76, 12), QzssDcrCodeTables::Id::VolcanoName))
+    return true;
+}
+
+struct DcrRegionalWarnings {
+    unsigned firstBit;
+    unsigned warningBits;
+    unsigned regionBits;
+    unsigned count;
+    DcrCode warningTable;
+    DcrCode regionTable;
+
+    unsigned recordBit(unsigned i) const { return firstBit + i * (warningBits + regionBits); }
+    uint32_t warning(const uint8_t *frame, unsigned i) const { return getBits(frame, recordBit(i), warningBits); }
+    uint64_t region(const uint8_t *frame, unsigned i) const { return getBits64(frame, recordBit(i) + warningBits, regionBits); }
+};
+
+constexpr DcrRegionalWarnings DCR_WEATHER{
+    56, 5, 19, 6, DcrCode::WeatherRelatedDisasterSubCategory, DcrCode::WeatherForecastRegion};
+constexpr DcrRegionalWarnings DCR_FLOOD{53, 4, 40, 3, DcrCode::FloodWarningLevel, DcrCode::FloodForecastRegion};
+constexpr DcrRegionalWarnings DCR_MARINE{53, 5, 14, 8, DcrCode::MarineWarningCode, DcrCode::MarineForecastRegion};
+
+const char *dcrCommonWarning(const uint8_t *frame, const DcrRegionalWarnings &layout)
+{
+    uint32_t code = UINT32_MAX;
+    for (unsigned i = 0; i < layout.count; ++i) {
+        if (!layout.region(frame, i))
+            continue;
+        const uint32_t warning = layout.warning(frame, i);
+        if (code != UINT32_MAX && code != warning)
+            return nullptr;
+        code = warning;
+    }
+    return dcrName(layout.warningTable, code, nullptr);
+}
+
+bool appendDcrRegionalWarnings(DcrChat &chat, const uint8_t *frame, const DcrRegionalWarnings &layout, const char *state,
+                               bool warningInTitle)
+{
+    if (warningInTitle)
+        return appendDcrRegions(chat, "", layout.regionTable, layout.count, [&](unsigned i) { return layout.region(frame, i); });
+
+    uint32_t seen = 0;
+    for (unsigned i = 0; i < layout.count; ++i) {
+        const uint32_t code = layout.warning(frame, i);
+        const uint32_t mask = uint32_t{1} << code;
+        if (!layout.region(frame, i) || (seen & mask))
+            continue;
+        seen |= mask;
+        char label[96];
+        std::snprintf(label, sizeof(label), "%s%s ", dcrName(layout.warningTable, code, "警報種別不明"), state);
+        if (!appendDcrRegions(chat, label, layout.regionTable, layout.count,
+                              [&](unsigned j) { return layout.warning(frame, j) == code ? layout.region(frame, j) : 0; }))
             return false;
-        return appendDcrArrayValues(messages, frame, "対象自治体", 88, 23, 0, 23, 5,
-                                    QzssDcrCodeTables::Id::LocalGovernment, 23);
-    case 9: {
-        static constexpr DcrArrayField fields[] = {
-            {"予想時間", 0, 3, QzssDcrCodeTables::Id::ExpectedAshFallTime},
-            {"降灰警報", 3, 3, QzssDcrCodeTables::Id::AshFallWarningCode},
-            {"対象自治体", 6, 23, QzssDcrCodeTables::Id::LocalGovernment},
-        };
-        if (!appendDcrTimeFields(messages, frame, "火山活動時刻", 53, reportEpoch) ||
-            !appendDcrCodeValue(messages, "降灰情報種別", getBits(frame, 69, 2),
-                                QzssDcrCodeTables::Id::AshFallWarningType) ||
-            !appendDcrCodeValue(messages, "火山名", getBits(frame, 71, 12), QzssDcrCodeTables::Id::VolcanoName))
-            return false;
-        return appendDcrArrayRecords(messages, frame, "降灰予想", 83, 29, 4, 29, fields,
-                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
     }
-    case 10: {
-        static constexpr DcrArrayField fields[] = {
-            {"気象警報", 0, 5, QzssDcrCodeTables::Id::WeatherRelatedDisasterSubCategory},
-            {"対象地域", 5, 19, QzssDcrCodeTables::Id::WeatherForecastRegion},
-        };
-        if (!appendDcrCodeValue(messages, "警報状態", getBits(frame, 53, 3),
-                                QzssDcrCodeTables::Id::WeatherWarningState))
-            return false;
-        return appendDcrArrayRecords(messages, frame, "気象警報・地域", 56, 24, 6, 24, fields,
-                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
-    }
-    case 11: {
-        static constexpr DcrArrayField fields[] = {
-            {"水位警報", 0, 4, QzssDcrCodeTables::Id::FloodWarningLevel},
-            {"洪水予報区", 4, 40, QzssDcrCodeTables::Id::FloodForecastRegion},
-        };
-        return appendDcrArrayRecords(messages, frame, "水位警報・洪水予報区", 53, 44, 3, 44, fields,
-                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
-    }
-    case 12: {
-        const uint32_t referenceTimeType = getBits(frame, 69, 3);
-        return appendDcrTimeFields(messages, frame, "基点時刻", 53, reportEpoch) &&
-               appendDcrCodeValue(messages, "基点時刻分類", referenceTimeType,
-                                  QzssDcrCodeTables::Id::TyphoonReferenceTimeType) &&
-               appendDcrCodeValue(messages, "基点時刻からの経過", getBits(frame, 80, 7),
-                                  QzssDcrCodeTables::Id::TyphoonElapsedTimeFromReferenceTime) &&
-               appendDcrCodeValue(messages, "台風番号", getBits(frame, 87, 7), QzssDcrCodeTables::Id::TyphoonNumber) &&
-               appendDcrCodeValue(messages, "台風の大きさ", getBits(frame, 94, 4),
-                                  QzssDcrCodeTables::Id::TyphoonScaleCategory) &&
-               appendDcrCodeValue(messages, "台風の強さ", getBits(frame, 98, 4),
-                                  QzssDcrCodeTables::Id::TyphoonIntensityCategory) &&
-               appendDcrLatitudeLongitude(messages, frame, 102) &&
-               appendDcrCodeValue(messages, "中心気圧", getBits(frame, 143, 11),
-                                  QzssDcrCodeTables::Id::TyphoonCentralPressure) &&
-               appendDcrCodeValue(messages, "最大風速", getBits(frame, 154, 7),
-                                  QzssDcrCodeTables::Id::TyphoonMaximumWindSpeed) &&
-               appendDcrCodeValue(messages, "最大瞬間風速", getBits(frame, 161, 7),
-                                  QzssDcrCodeTables::Id::TyphoonMaximumGustWindSpeed);
-    }
-    case 14: {
-        static constexpr DcrArrayField fields[] = {
-            {"海上警報", 0, 5, QzssDcrCodeTables::Id::MarineWarningCode},
-            {"海域", 5, 14, QzssDcrCodeTables::Id::MarineForecastRegion},
-        };
-        return appendDcrArrayRecords(messages, frame, "海上警報・海域", 53, 19, 8, 19, fields,
-                                     sizeof(fields) / sizeof(fields[0]), reportEpoch);
-    }
-    default:
-        return appendDecodedQzssBits(messages, frame, "未定義災害データ（53-213ビット）", 53, 161);
-    }
+    return true;
+}
+
+bool appendDcrTyphoon(DcrChat &chat, const uint8_t *frame, time_t issued)
+{
+    char event[40];
+    dcrEventTime(frame, 53, issued, event, sizeof(event));
+    const char *type = dcrName(DcrCode::TyphoonReferenceTimeType, getBits(frame, 69, 3), "基点");
+    if (*event && !chat.append("%s %s", type, event))
+        return false;
+
+    const uint32_t scaleCode = getBits(frame, 94, 4);
+    const uint32_t intensityCode = getBits(frame, 98, 4);
+    const char *scale = scaleCode ? dcrName(DcrCode::TyphoonScaleCategory, scaleCode, "") : "";
+    const char *intensity = intensityCode ? dcrName(DcrCode::TyphoonIntensityCategory, intensityCode, "") : "";
+    const unsigned wind = getBits(frame, 154, 7);
+    char windText[32] = {};
+    if (wind >= 15 && wind <= 105)
+        std::snprintf(windText, sizeof(windText), "最大風速%u m/s", wind);
+    if (!chat.append("%s%s%s%s%s", scale, *scale && *intensity ? "・" : "", intensity,
+                     (*scale || *intensity) && *windText ? "／" : "", windText))
+        return false;
+    char coordinates[48];
+    return !formatDcrCoordinates(frame, 102, coordinates, sizeof(coordinates)) || chat.append("中心 %s", coordinates);
 }
 
 bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
 {
     const uint32_t hazard = getBits(frame, 17, 4);
-    time_t reportEpoch = 0;
-    initDecodedQzssMessages(messages, "みちびき災危通報 MT43");
-    return appendDcrReportHeader(messages, frame, hazard, reportEpoch) &&
-           appendDcrCategoryFields(messages, frame, hazard, reportEpoch) &&
-           appendDecodedQzssNumber(messages, "予約領域", getBits(frame, 220, 6));
+    const uint32_t info = getBits(frame, 41, 2);
+    const bool training = getBits(frame, 14, 3) == 7;
+    const char *kind = dcrInformationTypeText(hazard, info);
+    const bool cancelled = std::strcmp(kind, "取消") == 0;
+    const char *name = dcrHazardText(hazard);
+    const DcrRegionalWarnings *regional = nullptr;
+    bool regionInTitle = false;
+    char subject[96];
+    switch (hazard) {
+    case 4:
+        std::snprintf(subject, sizeof(subject), "南海トラフ地震臨時情報（%s）", dcrNankaiStatus(getBits(frame, 53, 4)));
+        name = subject;
+        break;
+    case 5: {
+        if (!cancelled)
+            name = dcrTsunamiWarning(getBits(frame, 80, 4));
+        const char *region = dcrName(DcrCode::TsunamiForecastRegion, dcrSingleTsunamiRegion(frame), nullptr);
+        if (region) {
+            std::snprintf(subject, sizeof(subject), "%s｜%s", name, region);
+            name = subject;
+            regionInTitle = true;
+        }
+        break;
+    }
+    case 8: {
+        const unsigned warningCode = getBits(frame, 69, 7);
+        std::snprintf(subject, sizeof(subject), "%s｜%s%s", dcrName(DcrCode::VolcanoName, getBits(frame, 76, 12), "火山情報"),
+                      warningCode >= 11 && warningCode <= 15 ? "噴火警戒" : "",
+                      dcrName(DcrCode::VolcanicWarningCode, warningCode, "警報種別不明"));
+        name = subject;
+        break;
+    }
+    case 9:
+        std::snprintf(subject, sizeof(subject), "%s｜降灰予報（%s）",
+                      dcrName(DcrCode::VolcanoName, getBits(frame, 71, 12), "火山名不明"),
+                      dcrName(DcrCode::AshFallWarningType, getBits(frame, 69, 2), "種別不明"));
+        name = subject;
+        break;
+    case 10:
+        regional = &DCR_WEATHER;
+        break;
+    case 11:
+        regional = &DCR_FLOOD;
+        break;
+    case 12: {
+        const unsigned number = getBits(frame, 87, 7);
+        if (number >= 1 && number <= 99) {
+            std::snprintf(subject, sizeof(subject), "台風%u号", number);
+            name = subject;
+        }
+        break;
+    }
+    case 14:
+        regional = &DCR_MARINE;
+        break;
+    default:
+        break;
+    }
+
+    const char *warningState = "";
+    if (!cancelled && hazard == 10) {
+        const unsigned state = getBits(frame, 53, 3);
+        if (state != 1)
+            warningState = state == 2 ? " 解除" : " 状態不明";
+    }
+    const char *warning = regional ? dcrCommonWarning(frame, *regional) : nullptr;
+    if (warning) {
+        std::snprintf(subject, sizeof(subject), "%s%s", warning, warningState);
+        name = subject;
+    }
+
+    char title[160];
+    const char *status = cancelled ? "【取消】" : std::strcmp(kind, "訂正") == 0 ? "【訂正】" : "";
+    std::snprintf(title, sizeof(title), "%s%s%s", training ? "【訓練・試験】" : "", status, name ? name : "災危通報（種別不明）");
+    const unsigned month = getBits(frame, 21, 4);
+    const unsigned day = getBits(frame, 25, 5);
+    const unsigned hour = getBits(frame, 30, 5);
+    const unsigned minute = getBits(frame, 35, 6);
+    time_t issued = 0;
+    char issuedText[40] = "時刻不明";
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
+        if (!findDcrReportEpoch(month, day, hour, minute, issued) ||
+            !formatDcrLocalTime(issued, issuedText, sizeof(issuedText)))
+            std::snprintf(issuedText, sizeof(issuedText), "%02u/%02u %02u:%02u UTC", month, day, hour, minute);
+    }
+
+    char header[96];
+    std::snprintf(header, sizeof(header), "みちびきDCR 発表時刻:%s", issuedText);
+    DcrChat chat(messages, header);
+    if (!chat.append("%s", title))
+        return false;
+    bool ok = true;
+    switch (hazard) {
+    case 1:
+    case 2:
+    case 3:
+        ok = appendDcrEarthquake(chat, frame, hazard, issued, cancelled);
+        break;
+    case 4:
+        ok = cancelled || appendDcrNankai(chat, frame, training);
+        break;
+    case 5:
+    case 6:
+        ok = appendDcrTsunami(chat, frame, hazard, issued, cancelled, regionInTitle);
+        break;
+    case 8:
+        ok = appendDcrVolcano(chat, frame, issued, cancelled);
+        break;
+    case 9:
+        ok = appendDcrAshFall(chat, frame, issued, cancelled);
+        break;
+    case 10:
+    case 11:
+    case 14:
+        ok = appendDcrRegionalWarnings(chat, frame, *regional, warningState, warning != nullptr);
+        break;
+    case 12:
+        ok = cancelled || appendDcrTyphoon(chat, frame, issued);
+        break;
+    }
+    return ok && chat.finish();
 }
 
 bool formatDcxInstruction(uint32_t code, char *text, size_t capacity)
@@ -1939,162 +2058,7 @@ bool formatDcxInstruction(uint32_t code, char *text, size_t capacity)
             std::snprintf(text, capacity, "%sに%s。", locations[location], actions[action]);
         return true;
     }
-    std::snprintf(text, capacity, "行動指示は未対応です（コード%u）。", static_cast<unsigned>(code));
-    return true;
-}
-
-bool appendDcxMunicipality(char *message, size_t capacity, size_t &position, uint32_t code, const char *unknownPrefix)
-{
-    if (code <= UINT16_MAX) {
-        const char *name = QzssMunicipalityNames::find(static_cast<uint16_t>(code));
-        if (name)
-            return appendDcxText(message, capacity, position, name);
-    }
-
-    char codeText[8];
-    std::snprintf(codeText, sizeof(codeText), "%05u", static_cast<unsigned>(code));
-    return appendDcxText(message, capacity, position, unknownPrefix) &&
-           appendDcxText(message, capacity, position, codeText);
-}
-
-bool appendDcxTarget(const uint8_t *frame, uint32_t country, uint32_t provider, char *message, size_t capacity, size_t &position)
-{
-    if (!appendDcxText(message, capacity, position, "対象:"))
-        return false;
-
-    if (country == 111 && (provider == 2 || provider == 3)) {
-        static const char *const prefectures[] = {"北海道", "青森", "岩手", "宮城", "秋田", "山形", "福島", "茨城", "栃木", "群馬",
-                                                  "埼玉",   "千葉", "東京", "神奈川", "新潟", "富山", "石川", "福井", "山梨", "長野",
-                                                  "岐阜",   "静岡", "愛知", "三重",   "滋賀", "京都", "大阪", "兵庫", "奈良", "和歌山",
-                                                  "鳥取",   "島根", "岡山", "広島",   "山口", "徳島", "香川", "愛媛", "高知", "福岡",
-                                                  "佐賀",   "長崎", "熊本", "大分",   "宮崎", "鹿児島", "沖縄"};
-        const uint32_t codeListType = getBits(frame, 146, 1);
-        if (codeListType == 0) {
-            uint8_t count = 0;
-            for (uint8_t i = 0; i < 47; ++i)
-                count += getBits(frame, 147 + (46 - i), 1) != 0;
-            if (count == 47)
-                return appendDcxText(message, capacity, position, "全国/");
-            if (count == 0)
-                return appendDcxText(message, capacity, position, "指定なし/");
-
-            uint8_t written = 0;
-            for (uint8_t i = 0; i < 47 && written < 3; ++i) {
-                if (getBits(frame, 147 + (46 - i), 1) == 0)
-                    continue;
-                if (written && !appendDcxText(message, capacity, position, "・"))
-                    return false;
-                if (!appendDcxText(message, capacity, position, prefectures[i]))
-                    return false;
-                ++written;
-            }
-            if (count > written) {
-                if (!appendDcxText(message, capacity, position, "ほか"))
-                    return false;
-                if (!appendDcxNumber(message, capacity, position, count - written) ||
-                    !appendDcxText(message, capacity, position, "都道府県"))
-                    return false;
-            }
-            return appendDcxText(message, capacity, position, "/");
-        }
-
-        uint8_t written = 0;
-        for (unsigned i = 0; i < 4; ++i) {
-            const uint32_t code = getBits(frame, 147 + i * 16, 16);
-            if (code == 0)
-                continue;
-            if (written && !appendDcxText(message, capacity, position, "・"))
-                return false;
-            if (!appendDcxMunicipality(message, capacity, position, code, "コード"))
-                return false;
-            ++written;
-        }
-        return appendDcxText(message, capacity, position, written ? "/" : "指定なし/");
-    }
-
-    if (country != 111) {
-        if (!appendDcxText(message, capacity, position, "対象国・地域:"))
-            return false;
-        const char *countryText = dcxCountryText(country);
-        if (countryText) {
-            if (!appendDcxText(message, capacity, position, countryText))
-                return false;
-        } else if (!appendDcxText(message, capacity, position, "コード") ||
-                   !appendDcxNumber(message, capacity, position, static_cast<unsigned>(country))) {
-            return false;
-        }
-        const uint32_t ellipse = getBits(frame, 80, 16) | getBits(frame, 96, 17) | getBits(frame, 113, 5) |
-                                 getBits(frame, 118, 5) | getBits(frame, 123, 6);
-        return appendDcxText(message, capacity, position, ellipse ? "・楕円範囲/" : "・国・地域全域/");
-    }
-    if (provider != 1 && provider != 4)
-        return appendDcxText(message, capacity, position, "地域形式は未対応/");
-
-    const uint32_t targetCode = getBits(frame, 146, 16);
-    if (targetCode != 0) {
-        if (!appendDcxMunicipality(message, capacity, position, targetCode, "市区町村コード"))
-            return false;
-    } else {
-        const uint32_t ellipse = getBits(frame, 80, 16) | getBits(frame, 96, 17) | getBits(frame, 113, 5) | getBits(frame, 118, 5) |
-                                 getBits(frame, 123, 6);
-        if (!appendDcxText(message, capacity, position, ellipse ? "楕円範囲" : "指定なし"))
-            return false;
-    }
-    return appendDcxText(message, capacity, position, "/");
-}
-
-bool formatDcxMessage(const uint8_t *frame, char *message, size_t capacity, size_t &position)
-{
-    const uint32_t messageType = getBits(frame, 24, 2);
-    const uint32_t country = getBits(frame, 26, 9);
-    const uint32_t provider = getBits(frame, 35, 5);
-    const uint32_t hazard = getBits(frame, 40, 7);
-    const uint32_t severity = getBits(frame, 47, 2);
-    const uint32_t library = getBits(frame, 66, 1);
-    const uint32_t instruction = getBits(frame, 70, 10);
-    static const char *const messageTypes[] = {"試験", "警報", "更新", "解除"};
-
-    message[0] = '\0';
-    position = 0;
-    if (!appendDcxText(message, capacity, position, "みちびきDCX【") ||
-        !appendDcxText(message, capacity, position, messageTypes[messageType]) ||
-        !appendDcxText(message, capacity, position, "】/災害:"))
-        return false;
-    const char *hazardText = dcxHazardText(hazard);
-    if (hazardText) {
-        if (!appendDcxText(message, capacity, position, hazardText))
-            return false;
-    } else if (!appendDcxText(message, capacity, position, "コード") ||
-               !appendDcxNumber(message, capacity, position, static_cast<unsigned>(hazard))) {
-        return false;
-    }
-    if (messageType != 0 && (!appendDcxText(message, capacity, position, "・") ||
-                             !appendDcxText(message, capacity, position, dcxSeverityText(severity))))
-        return false;
-    if (!appendDcxText(message, capacity, position, "/") ||
-        !appendDcxTarget(frame, country, provider, message, capacity, position))
-        return false;
-
-    char instructionText[144];
-    if (country == 111 && library == 1) {
-        if (!formatDcxInstruction(instruction, instructionText, sizeof(instructionText)))
-            return false;
-    } else if (library == 0) {
-        const uint32_t actionA = instruction >> 5;
-        const uint32_t actionB = instruction & 0x1F;
-        if (actionA == 0 && actionB == 0) {
-            instructionText[0] = '\0';
-        } else {
-            std::snprintf(instructionText, sizeof(instructionText), "行動指示A%02u:%s/B%02u:%s",
-                          static_cast<unsigned>(actionA + 1), dcxInternationalInstructionA(actionA),
-                          static_cast<unsigned>(actionB + 1), dcxInternationalInstructionB(actionB));
-        }
-    } else {
-        std::snprintf(instructionText, sizeof(instructionText), "地域別行動指示=未対応(%u)",
-                      static_cast<unsigned>(instruction));
-    }
-    if (instructionText[0] && !appendDcxText(message, capacity, position, instructionText))
-        return false;
+    std::snprintf(text, capacity, "行動指示の詳細は不明");
     return true;
 }
 
@@ -2107,44 +2071,35 @@ uint32_t dcxEllipseRadiusMilliKm(uint32_t code)
     return code < sizeof(radiusMilliKm) / sizeof(radiusMilliKm[0]) ? radiusMilliKm[code] : 0;
 }
 
-bool appendDcxEllipseDetails(DecodedQzssMessages &messages, const uint8_t *frame, bool userFacing = false)
+bool appendDcxEllipseDetails(DecodedQzssMessages &messages, const uint8_t *frame)
 {
     const uint32_t a12 = getBits(frame, 80, 16);
     const uint32_t a13 = getBits(frame, 96, 17);
     const uint32_t a14 = getBits(frame, 113, 5);
     const uint32_t a15 = getBits(frame, 118, 5);
     const uint32_t a16 = getBits(frame, 123, 6);
-    const int32_t latitudeMilliDegrees =
-        -90000 + static_cast<int32_t>((static_cast<uint64_t>(a12) * 180000 + 32767) / 65535);
-    const int32_t longitudeMilliDegrees =
-        -180000 + static_cast<int32_t>((static_cast<uint64_t>(a13) * 360000 + 65535) / 131071);
+    const int32_t latitudeMilliDegrees = -90000 + static_cast<int32_t>((static_cast<uint64_t>(a12) * 180000 + 32767) / 65535);
+    const int32_t longitudeMilliDegrees = -180000 + static_cast<int32_t>((static_cast<uint64_t>(a13) * 360000 + 65535) / 131071);
     const uint32_t majorRadius = dcxEllipseRadiusMilliKm(a14);
     const uint32_t minorRadius = dcxEllipseRadiusMilliKm(a15);
     const int32_t azimuthCentiDegrees = -9000 + static_cast<int32_t>((a16 * 18000 + 32) / 64);
-    return appendDecodedQzssFixed(messages, userFacing ? "範囲中心緯度" : "A12/楕円中心緯度", latitudeMilliDegrees, 3,
-                                  "°") &&
-           appendDecodedQzssFixed(messages, userFacing ? "範囲中心経度" : "A13/楕円中心経度", longitudeMilliDegrees, 3,
-                                  "°") &&
-           appendDecodedQzssFixed(messages, userFacing ? "範囲の長半径" : "A14/長半径", static_cast<int32_t>(majorRadius),
-                                  3, "km") &&
-           appendDecodedQzssFixed(messages, userFacing ? "範囲の短半径" : "A15/短半径", static_cast<int32_t>(minorRadius), 3,
-                                  "km") &&
-           appendDecodedQzssFixed(messages, userFacing ? "範囲の方位" : "A16/楕円方位", azimuthCentiDegrees, 2, "°");
+    return appendDecodedQzssFixed(messages, "A12/楕円中心緯度", latitudeMilliDegrees, 3, "°") &&
+           appendDecodedQzssFixed(messages, "A13/楕円中心経度", longitudeMilliDegrees, 3, "°") &&
+           appendDecodedQzssFixed(messages, "A14/長半径", static_cast<int32_t>(majorRadius), 3, "km") &&
+           appendDecodedQzssFixed(messages, "A15/短半径", static_cast<int32_t>(minorRadius), 3, "km") &&
+           appendDecodedQzssFixed(messages, "A16/楕円方位", azimuthCentiDegrees, 2, "°");
 }
 
-bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard,
-                        bool userFacing = false)
+bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uint32_t hazard, DcrChat *chat = nullptr)
 {
     const uint32_t settingType = getBits(frame, 129, 2);
     char label[64];
-    if (userFacing && settingType != 3)
-        return true;
     if (settingType == 0) {
         static constexpr uint16_t centerRefinementMicroDegrees[] = {0, 343, 687, 1030, 1373, 1717, 2060, 2403};
         for (uint8_t i = 0; i < 2; ++i) {
             const uint32_t value = getBits(frame, 131 + i * 3, 3);
-            std::snprintf(label, sizeof(label), "C%u/%s補正(コード=%u)", static_cast<unsigned>(i + 1),
-                          i == 0 ? "緯度" : "経度", static_cast<unsigned>(value));
+            std::snprintf(label, sizeof(label), "C%u/%s補正(コード=%u)", static_cast<unsigned>(i + 1), i == 0 ? "緯度" : "経度",
+                          static_cast<unsigned>(value));
             if (!appendDecodedQzssFixed(messages, label, centerRefinementMicroDegrees[value], 6, "°"))
                 return false;
         }
@@ -2199,23 +2154,21 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
         const DcxB4Field *fields;
         uint8_t count;
     };
-    static constexpr DcxB4Field earthquake[] = {{"D1/マグニチュード", 4}, {"D2/震度係数", 3}, {"D3/震央方位", 4},
-                                                 {"D4/震央距離", 4}};
+    static constexpr DcxB4Field earthquake[] = {
+        {"D1/マグニチュード", 4}, {"D2/震度係数", 3}, {"D3/震央方位", 4}, {"D4/震央距離", 4}};
     static constexpr DcxB4Field tidalWave[] = {{"D5/波高", 3}};
     static constexpr DcxB4Field temperature[] = {{"D6/気温範囲", 4}};
     static constexpr DcxB4Field hurricane[] = {{"D7/ハリケーン分類", 3}, {"D8/風速", 4}, {"D9/降雨量", 3}};
     static constexpr DcxB4Field typhoon[] = {{"D36/台風分類", 3}, {"D8/風速", 4}, {"D9/降雨量", 3}};
     static constexpr DcxB4Field tornado[] = {{"D8/風速", 4}, {"D9/降雨量", 3}, {"D11/竜巻確率", 3}};
-    static constexpr DcxB4Field storm[] = {{"D8/風速", 4}, {"D9/降雨量", 3}, {"D10/被害分類", 3},
-                                           {"D16/雷強度", 3}};
+    static constexpr DcxB4Field storm[] = {{"D8/風速", 4}, {"D9/降雨量", 3}, {"D10/被害分類", 3}, {"D16/雷強度", 3}};
     static constexpr DcxB4Field hail[] = {{"D12/雹スケール", 4}};
     static constexpr DcxB4Field rainfall[] = {{"D9/降雨量", 3}, {"D13/視程", 4}};
     static constexpr DcxB4Field snowfall[] = {{"D14/積雪深", 5}, {"D13/視程", 4}};
     static constexpr DcxB4Field flood[] = {{"D15/洪水深刻度", 2}};
     static constexpr DcxB4Field lightning[] = {{"D16/雷強度", 3}};
     static constexpr DcxB4Field windChill[] = {{"D8/風速", 4}, {"D6/気温範囲", 4}};
-    static constexpr DcxB4Field derecho[] = {{"D8/風速", 4}, {"D9/降雨量", 3}, {"D16/雷強度", 3},
-                                             {"D11/竜巻確率", 3}};
+    static constexpr DcxB4Field derecho[] = {{"D8/風速", 4}, {"D9/降雨量", 3}, {"D16/雷強度", 3}, {"D11/竜巻確率", 3}};
     static constexpr DcxB4Field fog[] = {{"D17/霧レベル", 3}, {"D13/視程", 4}};
     static constexpr DcxB4Field blizzard[] = {{"D13/視程", 4}, {"D8/風速", 4}};
     static constexpr DcxB4Field drought[] = {{"D18/干ばつレベル", 2}};
@@ -2236,15 +2189,15 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
     static constexpr DcxB4Field biological[] = {{"D32/生物災害レベル", 2}, {"D33/生物災害種別", 2}};
     static constexpr DcxB4Field explosive[] = {{"D34/爆発物危険種別", 2}};
     static const DcxB4Schema schemas[] = {
-        {36, earthquake, 4}, {43, tidalWave, 1}, {44, tidalWave, 1}, {63, temperature, 1}, {71, temperature, 1},
-        {80, hurricane, 3}, {82, typhoon, 3}, {79, tornado, 3}, {77, storm, 4}, {70, hail, 1},
-        {74, rainfall, 2}, {76, snowfall, 2}, {68, flood, 1}, {72, lightning, 1}, {81, windChill, 2},
-        {64, derecho, 4}, {69, fog, 2}, {75, blizzard, 2}, {65, drought, 1}, {33, avalanche, 1},
-        {32, ashfall, 1}, {47, windWave, 2}, {37, geomagnetic, 1}, {30, fireRisk, 1}, {27, fireRisk, 1},
-        {16, waterQuality, 1}, {18, waterQuality, 1}, {21, waterQuality, 1}, {23, uv, 1}, {53, infection, 2},
-        {51, infection, 2}, {19, noise, 1}, {15, airQuality, 1}, {56, outage, 1}, {57, outage, 1},
-        {58, outage, 1}, {55, outage, 1}, {60, outage, 1}, {9, nuclear, 1}, {10, nuclear, 1},
-        {11, nuclear, 1}, {5, chemical, 1}, {4, biological, 2}, {6, explosive, 1}, {103, terrorism, 1}};
+        {36, earthquake, 4},   {43, tidalWave, 1},    {44, tidalWave, 1},    {63, temperature, 1}, {71, temperature, 1},
+        {80, hurricane, 3},    {82, typhoon, 3},      {79, tornado, 3},      {77, storm, 4},       {70, hail, 1},
+        {74, rainfall, 2},     {76, snowfall, 2},     {68, flood, 1},        {72, lightning, 1},   {81, windChill, 2},
+        {64, derecho, 4},      {69, fog, 2},          {75, blizzard, 2},     {65, drought, 1},     {33, avalanche, 1},
+        {32, ashfall, 1},      {47, windWave, 2},     {37, geomagnetic, 1},  {30, fireRisk, 1},    {27, fireRisk, 1},
+        {16, waterQuality, 1}, {18, waterQuality, 1}, {21, waterQuality, 1}, {23, uv, 1},          {53, infection, 2},
+        {51, infection, 2},    {19, noise, 1},        {15, airQuality, 1},   {56, outage, 1},      {57, outage, 1},
+        {58, outage, 1},       {55, outage, 1},       {60, outage, 1},       {9, nuclear, 1},      {10, nuclear, 1},
+        {11, nuclear, 1},      {5, chemical, 1},      {4, biological, 2},    {6, explosive, 1},    {103, terrorism, 1}};
     const DcxB4Schema *schema = nullptr;
     for (const DcxB4Schema &candidate : schemas) {
         if (candidate.hazard == hazard) {
@@ -2253,8 +2206,7 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
         }
     }
     if (!schema)
-        return userFacing ? appendDecodedQzssLine(messages, "災害詳細=未対応")
-                          : appendDecodedQzssBits(messages, frame, "A18/B4未対応詳細15ビット", 131, 15);
+        return chat || appendDecodedQzssBits(messages, frame, "A18/B4未対応詳細15ビット", 131, 15);
 
     uint16_t firstBit = 131;
     for (uint8_t i = 0; i < schema->count; ++i) {
@@ -2263,13 +2215,9 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
                                                      (field.name[2] == '/' ? 0 : field.name[2] - '0'));
         const uint32_t value = getBits(frame, firstBit, field.width);
         const char *meaning = dcxHazardDetailText(fieldId, value);
-        if (userFacing) {
-            const char *separator = std::strchr(field.name, '/');
-            const char *name = separator ? separator + 1 : field.name;
-            char line[160];
-            const int length = meaning ? std::snprintf(line, sizeof(line), "%s=%s", name, meaning)
-                                       : std::snprintf(line, sizeof(line), "%s=未対応", name);
-            if (length < 0 || static_cast<size_t>(length) >= sizeof(line) || !appendDecodedQzssLine(messages, line))
+        if (chat) {
+            const char *name = std::strchr(field.name, '/') + 1;
+            if (meaning && std::strcmp(meaning, "未定義コード") != 0 && !chat->append("%s %s", name, meaning))
                 return false;
         } else if (!appendDecodedQzssValue(messages, field.name, value, meaning)) {
             return false;
@@ -2277,76 +2225,194 @@ bool appendDcxA18Fields(DecodedQzssMessages &messages, const uint8_t *frame, uin
         firstBit += field.width;
     }
     const uint8_t reservedBitCount = static_cast<uint8_t>(146 - firstBit);
-    return userFacing || reservedBitCount == 0 ||
+    return chat || reservedBitCount == 0 ||
            appendDecodedQzssBits(messages, frame, "A18/B4予約ビット", firstBit, reservedBitCount);
+}
+
+struct DcxJAlertInstruction {
+    const char *headline;
+    const char *action;
+    bool allClear = false;
+};
+
+const DcxJAlertInstruction *dcxJAlertInstruction(uint32_t code)
+{
+    static constexpr DcxJAlertInstruction instructions[] = {
+        {"ミサイル発射の可能性", "建物内か地下へ避難。"},
+        {"ミサイルは通過したとみられる", "不審物に近づかず、直ちに警察・消防へ通報。", true},
+        {"ミサイルは海に落下したとみられる", "不審物に近づかず、直ちに警察・消防へ通報。", true},
+        {"ミサイルは日本に飛来しない見込み", "", true},
+        {"ミサイルが周辺に落下するおそれ", "直ちに建物内か地下へ避難。"},
+        {"ミサイル迎撃・破片落下のおそれ", "屋内避難を続け、続報を確認。"},
+        {"ミサイルは周辺に落下したとみられる", "屋内避難を続け、続報を確認。"},
+        {"ミサイルは日本に落下しない見込み", "", true},
+    };
+    return code >= 128 && code <= 135 ? &instructions[code - 128] : nullptr;
+}
+
+bool appendDcxChatInstruction(DcrChat &chat, bool japan, bool regionalLibrary, uint32_t code, const DcxJAlertInstruction *jAlert)
+{
+    if (!code)
+        return true;
+    if (jAlert)
+        return chat.append("%s", jAlert->action);
+    if (japan) {
+        if (code == 126 || code == 136)
+            return true;
+        char text[144];
+        formatDcxInstruction(code, text, sizeof(text));
+        return chat.append("%s", code < 128 || code > 135 ? text : "行動指示の詳細は不明");
+    }
+    if (regionalLibrary)
+        return chat.append("%s", "行動指示の詳細は不明");
+
+    const uint32_t actionA = code >> 5;
+    const uint32_t actionB = code & 0x1f;
+    const char *a = dcxInternationalInstructionA(actionA);
+    const char *b = dcxInternationalInstructionB(actionB);
+    return (!actionA || chat.append("%s", a)) && (!actionB || std::strcmp(a, b) == 0 || chat.append("%s", b));
+}
+
+bool appendDcxChatEllipse(DcrChat &chat, const uint8_t *frame, const char *label, bool additional)
+{
+    const uint32_t lat = getBits(frame, additional ? 163 : 80, additional ? 17 : 16);
+    const uint32_t lon = getBits(frame, additional ? 180 : 96, 17);
+    const uint32_t major = getBits(frame, additional ? 197 : 113, 5);
+    const uint32_t minor = getBits(frame, additional ? 202 : 118, 5);
+    const uint32_t angle = getBits(frame, additional ? 207 : 123, additional ? 7 : 6);
+    const double latitude = -90.0 + lat * 180.0 / (additional ? 131071 : 65535);
+    double longitude = additional ? 45.0 + lon * 180.0 / 131071 : -180.0 + lon * 360.0 / 131071;
+    if (longitude > 180.0)
+        longitude -= 360.0;
+    const double tilt = -90.0 + angle * 180.0 / (additional ? 128 : 64);
+    return chat.append("%s %.3f°, %.3f°／半径%g×%gkm／東基準%+.0f°", label, latitude, longitude,
+                       dcxEllipseRadiusMilliKm(major) / 1000.0, dcxEllipseRadiusMilliKm(minor) / 1000.0, tilt);
+}
+
+const char *dcxMunicipality(uint32_t code)
+{
+    if (!code)
+        return nullptr;
+    const char *name = QzssMunicipalityNames::find(static_cast<uint16_t>(code));
+    return name ? name : "市区町村名不明";
+}
+
+bool appendDcxChatTarget(DcrChat &chat, const uint8_t *frame, bool japan, bool jAlert)
+{
+    if (jAlert) {
+        if (getBit(frame, 146)) {
+            if (!getBits64(frame, 147, 64))
+                return chat.append("%s", "対象地域の指定なし");
+            return appendQzssRegions(chat, "対象 ", 4,
+                                     [&](unsigned i) { return dcxMunicipality(getBits(frame, 147 + i * 16, 16)); });
+        }
+        const uint64_t prefectures = getBits64(frame, 147, 47);
+        if (!prefectures)
+            return chat.append("%s", "対象地域の指定なし");
+        if (prefectures == ((uint64_t{1} << 47) - 1))
+            return chat.append("%s", "対象 全国");
+        return appendDcrRegions(chat, "対象 ", DcrCode::Prefecture, 47,
+                                [&](unsigned i) { return (prefectures & (uint64_t{1} << i)) ? i + 1 : 0; });
+    }
+    if (getBits64(frame, 80, 49))
+        return appendDcxChatEllipse(chat, frame, "対象範囲の目安", false);
+    if (!japan)
+        return true;
+    const char *municipality = dcxMunicipality(getBits(frame, 146, 16));
+    return !municipality || chat.append("対象 %s", municipality);
 }
 
 bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
 {
-    size_t summaryLength = 0;
-    if (!formatDcxMessage(frame, messages.text[0], sizeof(messages.text[0]), summaryLength))
-        return false;
-    messages.count = 1;
-    messages.length[0] = static_cast<uint16_t>(summaryLength);
-    if (messages.length[0] == 0 || messages.text[0][messages.length[0] - 1] != '/') {
-        if (messages.length[0] + 1 >= sizeof(messages.text[0]))
-            return false;
-        messages.text[0][messages.length[0]++] = '/';
-        messages.text[0][messages.length[0]] = '\0';
-    }
-
-    const uint32_t onsetWeek = getBits(frame, 49, 1);
-    const uint32_t onsetTimeOfWeek = getBits(frame, 50, 14);
-    if (onsetTimeOfWeek > 0 && onsetTimeOfWeek <= 10080) {
-        char onset[64];
-        char line[96];
-        formatDcxOnsetDescription(onsetWeek, onsetTimeOfWeek, onset, sizeof(onset));
-        const int length = std::snprintf(line, sizeof(line), "発生日時=%s", onset);
-        if (length < 0 || static_cast<size_t>(length) >= sizeof(line) || !appendDecodedQzssLine(messages, line))
-            return false;
-    }
-
-    static const char *const durations[] = {"不明", "6時間未満", "6-12時間", "12-24時間"};
-    const uint32_t duration = getBits(frame, 64, 2);
-    if (duration) {
-        char line[48];
-        std::snprintf(line, sizeof(line), "継続時間=%s", durations[duration]);
-        if (!appendDecodedQzssLine(messages, line))
-            return false;
-    }
-
+    const uint32_t type = getBits(frame, 24, 2);
     const uint32_t country = getBits(frame, 26, 9);
     const uint32_t provider = getBits(frame, 35, 5);
-    const bool japanJAlert = country == 111 && (provider == 2 || provider == 3);
-    if (!japanJAlert && !appendDcxEllipseDetails(messages, frame, true))
+    const uint32_t hazard = getBits(frame, 40, 7);
+    const uint32_t severity = getBits(frame, 47, 2);
+    const bool japan = country == 111;
+    const bool jAlert = japan && (provider == 2 || provider == 3);
+    const bool local = japan && provider == 4;
+    if (japan && (provider < 1 || provider > 4))
         return false;
 
-    const uint32_t settingType = getBits(frame, 129, 2);
-    return settingType != 3 || appendDcxA18Fields(messages, frame, getBits(frame, 40, 7), true);
+    const uint32_t code = getBits(frame, 70, 10);
+    const bool regionalLibrary = getBit(frame, 66);
+    const bool supportedLibrary = !japan || (regionalLibrary && getBits(frame, 67, 3) == 0);
+    const bool instructionTest = japan && supportedLibrary && (code == 126 || (jAlert && code == 136));
+    const bool test = type == 0 || hazard == 13 || hazard == 113 || instructionTest;
+    const DcxJAlertInstruction *instruction = jAlert && supportedLibrary ? dcxJAlertInstruction(code) : nullptr;
+    const bool cleared = type == 3 || (instruction && instruction->allClear);
+    const char *status = test          ? "【試験】"
+                         : type == 3   ? (jAlert ? "【誤報取消】" : "【解除】")
+                         : cleared     ? "【避難解除】"
+                         : type == 2   ? "【更新】"
+                         : instruction ? ""
+                                       : "【警報】";
+    const char *name = instruction && type != 3 && !instructionTest ? instruction->headline : dcxHazardText(hazard);
+    if ((!instruction || type == 3) && (hazard == 0 || hazard > 113))
+        name = test ? "災害情報" : "災害種別不明";
+    char title[136];
+    const char *source = jAlert ? "Jアラート｜" : local ? "自治体｜" : japan ? "Lアラート｜" : "";
+    const bool showSeverity = severity && !test && !cleared && !jAlert;
+    std::snprintf(title, sizeof(title), "%s%s%s%s%s", status, source, name, showSeverity ? "｜" : "",
+                  showSeverity ? dcxSeverityText(severity) : "");
+
+    char issuedTime[40] = "時刻不明";
+    const time_t receivedAt = static_cast<time_t>(getValidTime(RTCQualityFromNet));
+    if (receivedAt)
+        formatDcrLocalTime(receivedAt, issuedTime, sizeof(issuedTime));
+    char header[96];
+    std::snprintf(header, sizeof(header), "みちびきDCX 発表時刻:%s", issuedTime);
+    DcrChat chat(messages, header);
+    if (!chat.append("%s", title))
+        return false;
+    if (!instructionTest && type != 3 && code) {
+        if (!supportedLibrary) {
+            if (!chat.append("%s", "行動指示の詳細は不明"))
+                return false;
+        } else if (!appendDcxChatInstruction(chat, japan, regionalLibrary, code, instruction)) {
+            return false;
+        }
+    }
+    if (local && !cleared && getBits64(frame, 162, 52) &&
+        !appendDcxChatEllipse(chat, frame, getBit(frame, 162) ? "この範囲へ避難" : "この範囲から離れる", true))
+        return false;
+    if (!appendDcxChatTarget(chat, frame, japan, jAlert))
+        return false;
+
+    if (!cleared) {
+        const uint32_t onset = getBits(frame, 50, 14);
+        if (onset > 0 && onset <= 10080) {
+            char time[64];
+            formatDcxOnsetDescription(getBit(frame, 49), onset, time, sizeof(time));
+            if (!chat.append("発生見込み %s", time))
+                return false;
+        }
+        static const char *const durations[] = {"", "6時間未満", "6時間以上12時間未満", "12時間以上24時間未満"};
+        const uint32_t duration = getBits(frame, 64, 2);
+        if (duration && !chat.append("有効期間 %s", durations[duration]))
+            return false;
+        if (!japan && getBits(frame, 129, 2) == 3 && !appendDcxA18Fields(messages, frame, hazard, &chat))
+            return false;
+    }
+    if (!japan) {
+        const char *countryName = dcxCountryText(country);
+        if (std::strcmp(countryName, "予約") == 0)
+            return chat.finish();
+        const char *providerName = dcxProviderText(country, provider);
+        const bool namedProvider =
+            provider && std::strcmp(providerName, "予約") != 0 && std::strcmp(providerName, "国・地域別定義") != 0;
+        if (!chat.append("配信元 %s%s%s", countryName, namedProvider ? "・" : "", namedProvider ? providerName : ""))
+            return false;
+    }
+    return chat.finish();
 }
 
 bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMessages &messages)
 {
-    size_t summaryLength = 0;
-    if (!formatDcxMessage(frame, messages.text[0], sizeof(messages.text[0]), summaryLength))
-        return false;
-
     messages.count = 1;
-    messages.length[0] = static_cast<uint16_t>(summaryLength);
-    if (messages.length[0] == 0 || messages.text[0][messages.length[0] - 1] != '/') {
-        if (messages.length[0] + 1 < sizeof(messages.text[0])) {
-            messages.text[0][messages.length[0]++] = '/';
-            messages.text[0][messages.length[0]] = '\0';
-        } else {
-            messages.count = 2;
-            messages.length[1] = 0;
-            messages.text[1][0] = '\0';
-            size_t position = 0;
-            if (!appendDcxText(messages.text[1], sizeof(messages.text[1]), position, "（続き）/"))
-                return false;
-            messages.length[1] = static_cast<uint16_t>(position);
-        }
-    }
+    messages.length[0] = 0;
+    messages.text[0][0] = '\0';
     if (!appendDecodedQzssLine(messages, "MT44詳細"))
         return false;
 
@@ -2602,14 +2668,7 @@ void publishFrame(const uint8_t *payload)
 
     // GPS parsing is single-threaded; keep this multi-kilobyte buffer off the loop task stack.
     static DecodedQzssMessages messages;
-    if (messageType == 43) {
-        if (!formatDcrMessage(frame, messages))
-            return;
-    } else if (!formatDcxAllFields(frame, svId, messages)) {
-        return;
-    }
-
-    if (messageType == 44) {
+    if (messageType == 44 && formatDcxAllFields(frame, svId, messages)) {
         for (uint8_t i = 0; i < messages.count; ++i)
             LOG_INFO("[GPS] QZSS MT44 decoded: '%s'", messages.text[i]);
     }
@@ -2621,7 +2680,7 @@ void publishFrame(const uint8_t *payload)
         return;
     }
 
-    if (messageType == 44 && !formatDcxChatMessage(frame, messages))
+    if (!(messageType == 43 ? formatDcrMessage(frame, messages) : formatDcxChatMessage(frame, messages)))
         return;
 
     for (uint8_t i = 0; i < messages.count; ++i) {
