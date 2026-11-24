@@ -32,5 +32,6 @@ void setUbloxM10Detected(bool detected);
 bool setEnabled(bool enabled);
 void setReceptionEnabled(bool enabled);
 void reset();
+bool beginReceiveBatch();
 bool consumeByte(uint8_t byte);
 } // namespace QzssDcr

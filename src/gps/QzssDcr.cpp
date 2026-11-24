@@ -3,12 +3,13 @@
 #if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
 #include "MessageStore.h"
 #endif
+#include "FSCommon.h"
+#include "GPSLog.h"
 #include "QzssDcr.h"
 #include "QzssDcrCodeTables.h"
 #include "QzssMunicipalityNames.h"
-#include "FSCommon.h"
-#include "SafeFile.h"
 #include "SPILock.h"
+#include "SafeFile.h"
 #include "UptimeClock.h"
 #include "gps/RTC.h"
 #include "mesh/Channels.h"
@@ -266,10 +267,15 @@ bool registerMichibikiSatellite(uint8_t svId)
         return false;
 
     meshtastic_User satellite = meshtastic_User_init_zero;
-    std::snprintf(satellite.long_name, sizeof(satellite.long_name), "Michibiki SV%u", static_cast<unsigned>(svId));
     std::snprintf(satellite.short_name, sizeof(satellite.short_name), "Q%u", static_cast<unsigned>(svId));
     satellite.hw_model = meshtastic_HardwareModel_UNSET;
     satellite.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
+    if (existing && existing->channel == channelIndex && existing->hw_model == satellite.hw_model &&
+        existing->role == satellite.role && !nodeInfoLiteIsLicensed(existing) &&
+        std::strcmp(existing->short_name, satellite.short_name) == 0)
+        return true;
+
+    std::snprintf(satellite.long_name, sizeof(satellite.long_name), "Michibiki SV%u", static_cast<unsigned>(svId));
     satellite.has_is_unmessagable = true;
     satellite.is_unmessagable = true;
     nodeDB->updateUser(nodeNum, satellite, channelIndex);
@@ -2646,16 +2652,18 @@ void publishFrame(const uint8_t *payload)
     if (messageType != 43 && messageType != 44)
         return;
 
-    static constexpr char hexDigits[] = "0123456789ABCDEF";
-    char rawFrameHex[sizeof(frame) * 3] = {};
-    for (size_t i = 0; i < sizeof(frame); ++i) {
-        const size_t position = i * 3;
-        rawFrameHex[position] = hexDigits[frame[i] >> 4];
-        rawFrameHex[position + 1] = hexDigits[frame[i] & 0x0F];
-        if (i + 1 < sizeof(frame))
-            rawFrameHex[position + 2] = ' ';
+    if constexpr (GPS_DEBUG) {
+        static constexpr char hexDigits[] = "0123456789ABCDEF";
+        char rawFrameHex[sizeof(frame) * 3] = {};
+        for (size_t i = 0; i < sizeof(frame); ++i) {
+            const size_t position = i * 3;
+            rawFrameHex[position] = hexDigits[frame[i] >> 4];
+            rawFrameHex[position + 1] = hexDigits[frame[i] & 0x0F];
+            if (i + 1 < sizeof(frame))
+                rawFrameHex[position + 2] = ' ';
+        }
+        LOG_INFO("QZSS MT%u raw: %s", static_cast<unsigned>(messageType), rawFrameHex);
     }
-    LOG_INFO("QZSS MT%u raw: %s", static_cast<unsigned>(messageType), rawFrameHex);
 
     lastMt43Or44Ms = now;
     hasMt43Or44 = true;
@@ -2663,22 +2671,19 @@ void publishFrame(const uint8_t *payload)
         return;
 
     const bool canPublish = channelIndex != NO_CHANNEL && router && service;
-    if (!canPublish && messageType != 44)
+    if (canPublish && isDuplicateMtFrame(frame)) {
+        LOG_DEBUG_GPS("QZSS MT%u duplicate suppressed", static_cast<unsigned>(messageType));
         return;
+    }
 
     // GPS parsing is single-threaded; keep this multi-kilobyte buffer off the loop task stack.
     static DecodedQzssMessages messages;
-    if (messageType == 44 && formatDcxAllFields(frame, svId, messages)) {
+    if (GPS_DEBUG && messageType == 44 && formatDcxAllFields(frame, svId, messages)) {
         for (uint8_t i = 0; i < messages.count; ++i)
             LOG_INFO("[GPS] QZSS MT44 decoded: '%s'", messages.text[i]);
     }
     if (!canPublish)
         return;
-
-    if (isDuplicateMtFrame(frame)) {
-        LOG_INFO("[GPS] QZSS MT%u duplicate suppressed", static_cast<unsigned>(messageType));
-        return;
-    }
 
     if (!(messageType == 43 ? formatDcrMessage(frame, messages) : formatDcxChatMessage(frame, messages)))
         return;
@@ -3037,13 +3042,15 @@ void reset()
         cno.store(0);
 }
 
-bool consumeByte(uint8_t byte)
+bool beginReceiveBatch()
 {
     if (parserResetPending.exchange(false))
         parser.reset();
-    if (!isEnabled())
-        return false;
+    return enabled.load();
+}
 
+bool consumeByte(uint8_t byte)
+{
     switch (parser.state) {
     case ParserState::Sync1:
         if (byte != 0xB5)
@@ -3098,8 +3105,9 @@ bool consumeByte(uint8_t byte)
         else if (parser.receivedChecksumA != parser.checksumA || byte != parser.checksumB) {
             if (parser.messageClass == 0x02 && parser.messageId == 0x13)
                 ++sfrbxChecksumErrors;
-        } else
+        } else if (enabled.load()) {
             processUbxMessage();
+        }
         parser.reset();
         return true;
     }

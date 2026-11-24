@@ -2522,25 +2522,49 @@ bool GPS::whileActive()
         clearBuffer();
     }
 #endif
-    // First consume any chars that have piled up at the receiver
-    while (_serial_gps->available() > 0) {
-        int c = _serial_gps->read();
-        UBXscratch[charsInBuf] = c;
-#if GPS_DEBUG
-        debugmsg += vformat("%c", (c >= 32 && c <= 126) ? c : '.');
+#if defined(HAS_QZSS_DCR)
+    constexpr size_t RX_BATCH_SIZE = 64;
+#else
+    constexpr size_t RX_BATCH_SIZE = 1;
+#endif
+    for (int pending; (pending = _serial_gps->available()) > 0;) {
+        const size_t limit = std::min(static_cast<size_t>(pending), RX_BATCH_SIZE);
+#if defined(ARCH_ESP32) && defined(HAS_QZSS_DCR)
+        uint8_t batch[RX_BATCH_SIZE];
+        const size_t received = _serial_gps->read(batch, limit);
+        if (!received)
+            break;
+#else
+        const size_t received = limit;
 #endif
 #if defined(HAS_QZSS_DCR)
-        const bool ubxByte = keepQzssDcrActive && QzssDcr::consumeByte(static_cast<uint8_t>(c));
-        if (!ubxByte && powerState == GPS_ACTIVE)
+        const bool parseUbx = keepQzssDcrActive && QzssDcr::beginReceiveBatch();
 #endif
-            isValid |= reader.encode(c);
-        if (charsInBuf > sizeof(UBXscratch) - 10 || c == '\r') {
-            if (strnstr((char *)UBXscratch, "$GPTXT,01,01,02,u-blox ag - www.u-blox.com*50", charsInBuf)) {
-                rebootsSeen++;
+        for (size_t i = 0; i < received; ++i) {
+#if defined(ARCH_ESP32) && defined(HAS_QZSS_DCR)
+            const int c = batch[i];
+#else
+            const int c = _serial_gps->read();
+            if (c < 0)
+                return isValid;
+#endif
+            UBXscratch[charsInBuf] = c;
+#if GPS_DEBUG
+            debugmsg += vformat("%c", (c >= 32 && c <= 126) ? c : '.');
+#endif
+#if defined(HAS_QZSS_DCR)
+            const bool ubxByte = parseUbx && QzssDcr::consumeByte(static_cast<uint8_t>(c));
+            if (!ubxByte && powerState == GPS_ACTIVE)
+#endif
+                isValid |= reader.encode(c);
+            if (charsInBuf > sizeof(UBXscratch) - 10 || c == '\r') {
+                if (strnstr((char *)UBXscratch, "$GPTXT,01,01,02,u-blox ag - www.u-blox.com*50", charsInBuf)) {
+                    rebootsSeen++;
+                }
+                charsInBuf = 0;
+            } else {
+                charsInBuf++;
             }
-            charsInBuf = 0;
-        } else {
-            charsInBuf++;
         }
     }
 #if GPS_DEBUG
