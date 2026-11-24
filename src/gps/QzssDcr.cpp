@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 #include <time.h>
 
 namespace QzssDcr
@@ -1262,7 +1263,8 @@ constexpr size_t DCR_CHAT_CAPACITY =
     meshtastic_Constants_DATA_PAYLOAD_LEN;
 #endif
 static_assert(DCR_CHAT_CAPACITY <= meshtastic_Constants_DATA_PAYLOAD_LEN);
-constexpr size_t DCR_CHAT_PART_NUMBER_RESERVE = 8;
+constexpr size_t DCR_CHAT_PART_NUMBER_RESERVE = sizeof("(99/99)") - 1;
+static_assert(MAX_DECODED_QZSS_MESSAGES <= 99);
 constexpr time_t JST_OFFSET = 9 * SEC_PER_HOUR;
 
 class DcrChat
@@ -1270,11 +1272,12 @@ class DcrChat
   public:
     DcrChat(DecodedQzssMessages &messages, const char *header) : messages(messages), header(header)
     {
-        messages.count = 0;
-        startMessage();
+        messages.count = 1;
+        std::strcpy(messages.text[0], header);
+        messages.length[0] = std::strlen(header);
     }
 
-    size_t lineCapacity() const { return DCR_CHAT_CAPACITY - std::strlen(header) - DCR_CHAT_PART_NUMBER_RESERVE - 3; }
+    static constexpr size_t lineCapacity() { return DCR_CHAT_CAPACITY - DCR_CHAT_PART_NUMBER_RESERVE - 2; }
 
     template <typename... Args> bool append(const char *format, Args... args)
     {
@@ -1282,23 +1285,49 @@ class DcrChat
         const int length = std::snprintf(line, sizeof(line), format, args...);
         if (length < 0 || static_cast<size_t>(length) >= sizeof(line))
             return false;
-        if (length == 0)
-            return true;
-        if (static_cast<size_t>(length) > lineCapacity())
-            return false;
+        return appendText(std::string_view(line, length));
+    }
 
-        size_t index = messages.count - 1;
-        if (messages.length[index] + length + DCR_CHAT_PART_NUMBER_RESERVE + 2 >= DCR_CHAT_CAPACITY) {
-            if (messages.count == MAX_DECODED_QZSS_MESSAGES)
+    bool appendText(std::string_view text)
+    {
+        constexpr std::string_view FULLWIDTH_SPACE = "　";
+        while (!text.empty()) {
+            const size_t index = messages.count - 1;
+            const size_t used = messages.length[index];
+            const size_t available = used < lineCapacity() ? lineCapacity() - used : 0;
+            size_t length = text.size();
+            size_t advance = length;
+            if (length > available) {
+                const size_t space = text.find_last_of(" \t", available);
+                const size_t fullwidthSpace = text.rfind(FULLWIDTH_SPACE, available);
+                const bool useFullwidth = fullwidthSpace != text.npos && (space == text.npos || fullwidthSpace > space);
+                const size_t split = useFullwidth ? fullwidthSpace : space;
+                if (split != text.npos && split > 0) {
+                    length = split;
+                    advance = split + (useFullwidth ? FULLWIDTH_SPACE.size() : 1);
+                } else if (used) {
+                    if (!startContinuation())
+                        return false;
+                    continue;
+                } else {
+                    length = available;
+                    while (length && (static_cast<uint8_t>(text[length]) & 0xc0) == 0x80)
+                        --length;
+                    if (!length)
+                        return false;
+                    advance = length;
+                }
+            }
+
+            char *tail = messages.text[index] + used;
+            *tail++ = '\n';
+            std::memcpy(tail, text.data(), length);
+            tail[length] = '\0';
+            messages.length[index] += length + 1;
+            text.remove_prefix(advance);
+            if (!text.empty() && !startContinuation())
                 return false;
-            startMessage();
-            index = messages.count - 1;
         }
-
-        char *tail = messages.text[index] + messages.length[index];
-        *tail++ = '\n';
-        std::memcpy(tail, line, length + 1);
-        messages.length[index] += length + 1;
         return true;
     }
 
@@ -1310,8 +1339,8 @@ class DcrChat
         const size_t headerLength = std::strlen(header);
         for (uint8_t i = 0; i < messages.count; ++i) {
             char part[12];
-            const int length = std::snprintf(part, sizeof(part), "(%u/%u)", static_cast<unsigned>(i + 1),
-                                             static_cast<unsigned>(messages.count));
+            const int length =
+                std::snprintf(part, sizeof(part), "(%u/%u)", static_cast<unsigned>(i + 1), static_cast<unsigned>(messages.count));
             if (length < 0 || static_cast<size_t>(length) >= sizeof(part))
                 return false;
 
@@ -1321,31 +1350,32 @@ class DcrChat
                 const size_t suffixLength = partLength + 1;
                 if (messages.length[i] + suffixLength >= DCR_CHAT_CAPACITY)
                     return false;
-                std::memmove(text + headerLength + suffixLength, text + headerLength,
-                             messages.length[i] - headerLength + 1);
+                std::memmove(text + headerLength + suffixLength, text + headerLength, messages.length[i] - headerLength + 1);
                 text[headerLength] = ' ';
                 std::memcpy(text + headerLength + 1, part, partLength);
                 messages.length[i] += static_cast<uint16_t>(suffixLength);
             } else {
-                if (messages.length[i] < headerLength || std::memcmp(text, header, headerLength) != 0)
+                if (messages.length[i] + partLength >= DCR_CHAT_CAPACITY)
                     return false;
-                const size_t bodyLength = messages.length[i] - headerLength;
-                std::memmove(text + partLength, text + headerLength, bodyLength + 1);
+                std::memmove(text + partLength, text, messages.length[i] + 1);
                 std::memcpy(text, part, partLength);
                 if (text[partLength] == '\n')
                     text[partLength] = continuationSeparator;
-                messages.length[i] = static_cast<uint16_t>(partLength + bodyLength);
+                messages.length[i] += static_cast<uint16_t>(partLength);
             }
         }
         return true;
     }
 
   private:
-    void startMessage()
+    bool startContinuation()
     {
+        if (messages.count == MAX_DECODED_QZSS_MESSAGES)
+            return false;
         const size_t index = messages.count++;
-        std::strcpy(messages.text[index], header);
-        messages.length[index] = std::strlen(header);
+        messages.text[index][0] = '\0';
+        messages.length[index] = 0;
+        return true;
     }
 
     DecodedQzssMessages &messages;
@@ -1729,18 +1759,7 @@ bool appendDcrNankai(DcrChat &chat, const uint8_t *frame, bool training)
         if (*c == '\r' || *c == '\n')
             *c = ' ';
     }
-    const char *start = text;
-    size = std::strlen(text);
-    while (size) {
-        size_t bytes = size > chat.lineCapacity() ? chat.lineCapacity() : size;
-        while ((static_cast<uint8_t>(start[bytes]) & 0xc0) == 0x80)
-            --bytes;
-        if (!chat.append("%.*s", static_cast<int>(bytes), start))
-            return false;
-        start += bytes;
-        size -= bytes;
-    }
-    return true;
+    return chat.appendText(text);
 }
 
 bool appendDcrVolcano(DcrChat &chat, const uint8_t *frame, time_t issued, bool cancelled)
