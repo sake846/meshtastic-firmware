@@ -889,7 +889,7 @@ const char *dcrHazardText(uint32_t hazard)
     case 14:
         return "海上警報";
     default:
-        return nullptr;
+        return "災危通報（種別不明）";
     }
 }
 
@@ -1886,7 +1886,8 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     const bool training = getBits(frame, 14, 3) == 7;
     const char *kind = dcrInformationTypeText(hazard, info);
     const bool cancelled = std::strcmp(kind, "取消") == 0;
-    const char *name = dcrHazardText(hazard);
+    const char *category = dcrHazardText(hazard);
+    const char *name = category;
     const DcrRegionalWarnings *regional = nullptr;
     bool regionInTitle = false;
     char subject[96];
@@ -1953,9 +1954,9 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
         name = subject;
     }
 
-    char title[160];
+    char title[96];
     const char *status = cancelled ? "【取消】" : std::strcmp(kind, "訂正") == 0 ? "【訂正】" : "";
-    std::snprintf(title, sizeof(title), "%s%s%s", training ? "【訓練・試験】" : "", status, name ? name : "災危通報（種別不明）");
+    std::snprintf(title, sizeof(title), "%s%s[%s]", training ? "【訓練・試験】" : "", status, category);
     const unsigned month = getBits(frame, 21, 4);
     const unsigned day = getBits(frame, 25, 5);
     const unsigned hour = getBits(frame, 30, 5);
@@ -1971,7 +1972,10 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     char header[96];
     std::snprintf(header, sizeof(header), "みちびきDCR 発表時刻:%s", issuedText);
     DcrChat chat(messages, header);
-    if (!chat.append("%s", title))
+    const bool hasDetail = std::strcmp(name, category) != 0;
+    const bool inlineDetail = hasDetail && std::strlen(title) + 1 + std::strlen(name) <= chat.lineCapacity();
+    if (!chat.append("%s%s%s", title, inlineDetail ? " " : "", inlineDetail ? name : "") ||
+        (hasDetail && !inlineDetail && !chat.append("%s", name)))
         return false;
     bool ok = true;
     switch (hazard) {
