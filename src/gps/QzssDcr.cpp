@@ -1302,7 +1302,7 @@ class DcrChat
         return true;
     }
 
-    bool finish()
+    bool finish(char continuationSeparator = '\n')
     {
         if (messages.count < 2)
             return true;
@@ -1332,6 +1332,8 @@ class DcrChat
                 const size_t bodyLength = messages.length[i] - headerLength;
                 std::memmove(text + partLength, text + headerLength, bodyLength + 1);
                 std::memcpy(text, part, partLength);
+                if (text[partLength] == '\n')
+                    text[partLength] = continuationSeparator;
                 messages.length[i] = static_cast<uint16_t>(partLength + bodyLength);
             }
         }
@@ -2000,7 +2002,7 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
         ok = cancelled || appendDcrTyphoon(chat, frame, issued);
         break;
     }
-    return ok && chat.finish();
+    return ok && chat.finish(' ');
 }
 
 bool formatDcxInstruction(uint32_t code, char *text, size_t capacity)
