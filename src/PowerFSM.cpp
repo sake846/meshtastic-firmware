@@ -178,6 +178,9 @@ static void lsIdle()
                 // keyboard press (probably) triggered GPIO interrupt
                 pressed = true;
 #endif
+#ifdef ROTARY_PRESS
+                pressed = pressed || !digitalRead(ROTARY_PRESS);
+#endif
                 if (pressed) {
                     powerFSM.trigger(EVENT_PRESS);
                 }
