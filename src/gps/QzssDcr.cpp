@@ -1294,18 +1294,23 @@ class DcrChat
             if (length > available) {
                 size_t split = text.find_last_of(" \t", available);
                 size_t delimiterLength = 1;
+                bool includeDelimiter = false;
                 const size_t fullwidthSpace = text.rfind(FULLWIDTH_SPACE, available);
                 if (fullwidthSpace != text.npos && (split == text.npos || fullwidthSpace > split)) {
                     split = fullwidthSpace;
                     delimiterLength = FULLWIDTH_SPACE.size();
                 }
-                const size_t ideographicComma = text.rfind(IDEOGRAPHIC_COMMA, available);
+                const size_t ideographicComma = available >= IDEOGRAPHIC_COMMA.size()
+                                                    ? text.rfind(IDEOGRAPHIC_COMMA,
+                                                                 available - IDEOGRAPHIC_COMMA.size())
+                                                    : text.npos;
                 if (ideographicComma != text.npos && (split == text.npos || ideographicComma > split)) {
                     split = ideographicComma;
                     delimiterLength = IDEOGRAPHIC_COMMA.size();
+                    includeDelimiter = true;
                 }
                 if (split != text.npos && split > 0) {
-                    length = split;
+                    length = split + (includeDelimiter ? delimiterLength : 0);
                     advance = split + delimiterLength;
                 } else if (hasBody) {
                     if (!startPart())
