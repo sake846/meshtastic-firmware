@@ -1158,19 +1158,11 @@ bool findDcrReportEpoch(unsigned month, unsigned day, unsigned hour, unsigned mi
     return reportEpoch != 0;
 }
 
-bool formatDcrLocalTime(time_t timestamp, char *output, size_t capacity)
+bool formatDcrLocalTime(time_t timestamp, char *output, size_t capacity,
+                        const char *format = "%m/%d %H:%M")
 {
     const struct tm *localTimeValue = localtime(&timestamp);
-    if (!localTimeValue)
-        return false;
-    const struct tm localTime = *localTimeValue;
-    char timezone[16];
-    const size_t timezoneLength = strftime(timezone, sizeof(timezone), "%Z", &localTime);
-    const int length = timezoneLength ? std::snprintf(output, capacity, "%02d/%02d %02d:%02d %s", localTime.tm_mon + 1,
-                                                       localTime.tm_mday, localTime.tm_hour, localTime.tm_min, timezone)
-                                     : std::snprintf(output, capacity, "%02d/%02d %02d:%02d", localTime.tm_mon + 1,
-                                                     localTime.tm_mday, localTime.tm_hour, localTime.tm_min);
-    return length >= 0 && static_cast<size_t>(length) < capacity;
+    return localTimeValue && strftime(output, capacity, format, localTimeValue) != 0;
 }
 
 bool formatDcxOnsetLocalTime(uint32_t onsetWeek, uint32_t onsetTimeOfWeek, char *output, size_t capacity)
@@ -1265,8 +1257,6 @@ constexpr size_t DCR_CHAT_CAPACITY =
 static_assert(DCR_CHAT_CAPACITY <= meshtastic_Constants_DATA_PAYLOAD_LEN);
 constexpr size_t DCR_CHAT_PART_NUMBER_RESERVE = sizeof("(99/99)") - 1;
 static_assert(MAX_DECODED_QZSS_MESSAGES <= 99);
-constexpr time_t JST_OFFSET = 9 * SEC_PER_HOUR;
-
 class DcrChat
 {
   public:
@@ -1333,10 +1323,20 @@ class DcrChat
 
     bool finish(char continuationSeparator = '\n')
     {
+        const size_t headerLength = std::strlen(header);
+        if (continuationSeparator == ' ') {
+            for (uint8_t i = 0; i < messages.count; ++i) {
+                char *text = messages.text[i];
+                for (size_t position = 0; position < messages.length[i]; ++position) {
+                    if (text[position] == '\n' && (i != 0 || position != headerLength))
+                        text[position] = ' ';
+                }
+            }
+        }
+
         if (messages.count < 2)
             return true;
 
-        const size_t headerLength = std::strlen(header);
         for (uint8_t i = 0; i < messages.count; ++i) {
             char part[12];
             const int length =
@@ -1516,13 +1516,6 @@ bool appendDcrComments(DcrChat &chat, const uint8_t *frame, bool warningEnded)
     return true;
 }
 
-bool formatDcrJst(time_t epoch, char *out, size_t capacity, const char *format)
-{
-    const time_t jst = epoch + JST_OFFSET;
-    const struct tm *time = gmtime(&jst);
-    return time && strftime(out, capacity, format, time) != 0;
-}
-
 time_t dcrEventTime(const uint8_t *frame, unsigned firstBit, time_t issued, char *out, size_t capacity)
 {
     const unsigned day = getBits(frame, firstBit, 5);
@@ -1532,7 +1525,7 @@ time_t dcrEventTime(const uint8_t *frame, unsigned firstBit, time_t issued, char
     if (!day || hour > 23 || minute > 59)
         return 0;
     const time_t event = issued ? findDcrEventEpoch(issued, day, hour, minute) : 0;
-    if (!event || !formatDcrJst(event, out, capacity, "%m/%d %H:%M JST"))
+    if (!event || !formatDcrLocalTime(event, out, capacity))
         std::snprintf(out, capacity, "%u日 %02u:%02u UTC", day, hour, minute);
     return event;
 }
@@ -1686,8 +1679,14 @@ bool appendDcrTsunami(DcrChat &chat, const uint8_t *frame, uint32_t hazard, time
             char time[28];
             const time_t arrivalEpoch =
                 issued + offset * SEC_PER_DAY + hour * SEC_PER_HOUR + minute * SEC_PER_MIN - (issued % SEC_PER_DAY);
-            const bool sameDay = (arrivalEpoch + JST_OFFSET) / SEC_PER_DAY == (issued + JST_OFFSET) / SEC_PER_DAY;
-            if (!issued || !formatDcrJst(arrivalEpoch, time, sizeof(time), sameDay ? "%H:%M" : "%m/%d %H:%M"))
+            const struct tm *arrivalLocalValue = localtime(&arrivalEpoch);
+            struct tm arrivalLocal = {};
+            if (arrivalLocalValue)
+                arrivalLocal = *arrivalLocalValue;
+            const struct tm *issuedLocal = localtime(&issued);
+            const bool sameDay = arrivalLocalValue && issuedLocal && arrivalLocal.tm_year == issuedLocal->tm_year &&
+                                 arrivalLocal.tm_yday == issuedLocal->tm_yday;
+            if (!issued || !formatDcrLocalTime(arrivalEpoch, time, sizeof(time), sameDay ? "%H:%M" : "%m/%d %H:%M"))
                 std::snprintf(time, sizeof(time), "%s%02u:%02u UTC", offset ? "翌日 " : "当日 ", hour, minute);
             std::snprintf(arrival, sizeof(arrival), "%s到達予想", time);
         }
@@ -1777,8 +1776,8 @@ bool appendDcrVolcano(DcrChat &chat, const uint8_t *frame, time_t issued, bool c
             else if (day && hour <= 23) {
                 const time_t time = issued ? findDcrEventEpoch(issued, day, hour, 0) : 0;
                 char local[24];
-                if (time && formatDcrJst(time, local, sizeof(local), "%m/%d %H"))
-                    std::snprintf(event, sizeof(event), "%s時 JST", local);
+                if (time && formatDcrLocalTime(time, local, sizeof(local), "%m/%d %H"))
+                    std::snprintf(event, sizeof(event), "%s時", local);
                 else
                     std::snprintf(event, sizeof(event), "%u日 %u時 UTC", day, hour);
             }
@@ -1809,9 +1808,17 @@ bool appendDcrAshFall(DcrChat &chat, const uint8_t *frame, time_t issued, bool c
         char time[40] = {};
         if (hours >= 1 && hours <= 6) {
             char local[24];
-            if (activity && formatDcrJst(activity + hours * SEC_PER_HOUR, local, sizeof(local), "%m/%d %H:%M"))
-                std::snprintf(time, sizeof(time), "%s JSTごろ", local);
-            else
+            if (activity) {
+                const time_t forecast = activity + hours * SEC_PER_HOUR;
+                if (formatDcrLocalTime(forecast, local, sizeof(local))) {
+                    std::snprintf(time, sizeof(time), "%sごろ", local);
+                } else {
+                    const struct tm *utc = gmtime(&forecast);
+                    if (utc && strftime(local, sizeof(local), "%m/%d %H:%M", utc))
+                        std::snprintf(time, sizeof(time), "%s UTCごろ", local);
+                }
+            }
+            if (!*time)
                 std::snprintf(time, sizeof(time), "火山活動から%u時間後", hours);
         }
         if (!chat.append("%s %s%s%s", name, dcrName(DcrCode::AshFallWarningCode, getBits(frame, bit + 3, 3), "降灰内容不明"),
@@ -2388,13 +2395,7 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     std::snprintf(title, sizeof(title), "%s%s%s%s%s", status, source, name, showSeverity ? "｜" : "",
                   showSeverity ? dcxSeverityText(severity) : "");
 
-    char issuedTime[40] = "時刻不明";
-    const time_t receivedAt = static_cast<time_t>(getValidTime(RTCQualityFromNet));
-    if (receivedAt)
-        formatDcrLocalTime(receivedAt, issuedTime, sizeof(issuedTime));
-    char header[96];
-    std::snprintf(header, sizeof(header), "みちびきDCX 発表時刻:%s", issuedTime);
-    DcrChat chat(messages, header);
+    DcrChat chat(messages, "みちびきDCX");
     if (!chat.append("%s", title))
         return false;
     if (!instructionTest && type != 3 && code) {
@@ -2429,14 +2430,14 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     if (!japan) {
         const char *countryName = dcxCountryText(country);
         if (std::strcmp(countryName, "予約") == 0)
-            return chat.finish();
+            return chat.finish(' ');
         const char *providerName = dcxProviderText(country, provider);
         const bool namedProvider =
             provider && std::strcmp(providerName, "予約") != 0 && std::strcmp(providerName, "国・地域別定義") != 0;
         if (!chat.append("配信元 %s%s%s", countryName, namedProvider ? "・" : "", namedProvider ? providerName : ""))
             return false;
     }
-    return chat.finish();
+    return chat.finish(' ');
 }
 
 bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMessages &messages)
