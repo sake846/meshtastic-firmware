@@ -1291,11 +1291,6 @@ class DcrChat
             size_t length = text.size();
             size_t advance = length;
             if (length > available) {
-                if (hasBody && length <= capacity) {
-                    if (!startPart())
-                        return false;
-                    continue;
-                }
                 const size_t space = text.find_last_of(" \t", available);
                 const size_t fullwidthSpace = text.rfind(FULLWIDTH_SPACE, available);
                 const bool useFullwidth = fullwidthSpace != text.npos && (space == text.npos || fullwidthSpace > space);
