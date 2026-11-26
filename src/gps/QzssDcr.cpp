@@ -1280,6 +1280,7 @@ class DcrChat
     bool appendText(std::string_view text)
     {
         constexpr std::string_view FULLWIDTH_SPACE = "　";
+        constexpr std::string_view IDEOGRAPHIC_COMMA = "、";
         const size_t bodyStart = header.size() + 1;
         const size_t capacity = bodyCapacity();
         while (!text.empty()) {
@@ -1291,13 +1292,21 @@ class DcrChat
             size_t length = text.size();
             size_t advance = length;
             if (length > available) {
-                const size_t space = text.find_last_of(" \t", available);
+                size_t split = text.find_last_of(" \t", available);
+                size_t delimiterLength = 1;
                 const size_t fullwidthSpace = text.rfind(FULLWIDTH_SPACE, available);
-                const bool useFullwidth = fullwidthSpace != text.npos && (space == text.npos || fullwidthSpace > space);
-                const size_t split = useFullwidth ? fullwidthSpace : space;
+                if (fullwidthSpace != text.npos && (split == text.npos || fullwidthSpace > split)) {
+                    split = fullwidthSpace;
+                    delimiterLength = FULLWIDTH_SPACE.size();
+                }
+                const size_t ideographicComma = text.rfind(IDEOGRAPHIC_COMMA, available);
+                if (ideographicComma != text.npos && (split == text.npos || ideographicComma > split)) {
+                    split = ideographicComma;
+                    delimiterLength = IDEOGRAPHIC_COMMA.size();
+                }
                 if (split != text.npos && split > 0) {
                     length = split;
-                    advance = split + (useFullwidth ? FULLWIDTH_SPACE.size() : 1);
+                    advance = split + delimiterLength;
                 } else if (hasBody) {
                     if (!startPart())
                         return false;
