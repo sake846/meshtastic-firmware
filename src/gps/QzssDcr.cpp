@@ -1255,19 +1255,18 @@ constexpr size_t DCR_CHAT_CAPACITY =
     meshtastic_Constants_DATA_PAYLOAD_LEN;
 #endif
 static_assert(DCR_CHAT_CAPACITY <= meshtastic_Constants_DATA_PAYLOAD_LEN);
-constexpr size_t DCR_CHAT_PART_NUMBER_RESERVE = sizeof("(99/99)") - 1;
+constexpr size_t DCR_CHAT_PART_NUMBER_RESERVE = sizeof(" (99/99)") - 1;
 static_assert(MAX_DECODED_QZSS_MESSAGES <= 99);
 class DcrChat
 {
   public:
-    DcrChat(DecodedQzssMessages &messages, const char *header) : messages(messages), header(header)
+    DcrChat(DecodedQzssMessages &messages, std::string_view header) : messages(messages), header(header)
     {
-        messages.count = 1;
-        std::strcpy(messages.text[0], header);
-        messages.length[0] = std::strlen(header);
+        messages.count = 0;
+        startPart();
     }
 
-    static constexpr size_t lineCapacity() { return DCR_CHAT_CAPACITY - DCR_CHAT_PART_NUMBER_RESERVE - 2; }
+    size_t bodyCapacity() const { return DCR_CHAT_CAPACITY - header.size() - DCR_CHAT_PART_NUMBER_RESERVE - 2; }
 
     template <typename... Args> bool append(const char *format, Args... args)
     {
@@ -1281,13 +1280,22 @@ class DcrChat
     bool appendText(std::string_view text)
     {
         constexpr std::string_view FULLWIDTH_SPACE = "　";
+        const size_t bodyStart = header.size() + 1;
+        const size_t capacity = bodyCapacity();
         while (!text.empty()) {
             const size_t index = messages.count - 1;
             const size_t used = messages.length[index];
-            const size_t available = used < lineCapacity() ? lineCapacity() - used : 0;
+            const bool hasBody = used > bodyStart;
+            const size_t occupied = used - bodyStart + hasBody;
+            const size_t available = occupied < capacity ? capacity - occupied : 0;
             size_t length = text.size();
             size_t advance = length;
             if (length > available) {
+                if (hasBody && length <= capacity) {
+                    if (!startPart())
+                        return false;
+                    continue;
+                }
                 const size_t space = text.find_last_of(" \t", available);
                 const size_t fullwidthSpace = text.rfind(FULLWIDTH_SPACE, available);
                 const bool useFullwidth = fullwidthSpace != text.npos && (space == text.npos || fullwidthSpace > space);
@@ -1295,8 +1303,8 @@ class DcrChat
                 if (split != text.npos && split > 0) {
                     length = split;
                     advance = split + (useFullwidth ? FULLWIDTH_SPACE.size() : 1);
-                } else if (used) {
-                    if (!startContinuation())
+                } else if (hasBody) {
+                    if (!startPart())
                         return false;
                     continue;
                 } else {
@@ -1310,76 +1318,54 @@ class DcrChat
             }
 
             char *tail = messages.text[index] + used;
-            *tail++ = '\n';
+            if (hasBody)
+                *tail++ = ' ';
             std::memcpy(tail, text.data(), length);
             tail[length] = '\0';
-            messages.length[index] += length + 1;
+            messages.length[index] += static_cast<uint16_t>(length + hasBody);
             text.remove_prefix(advance);
-            if (!text.empty() && !startContinuation())
+            if (!text.empty() && !startPart())
                 return false;
         }
         return true;
     }
 
-    bool finish(char continuationSeparator = '\n')
+    bool finish()
     {
-        const size_t headerLength = std::strlen(header);
-        if (continuationSeparator == ' ') {
-            for (uint8_t i = 0; i < messages.count; ++i) {
-                char *text = messages.text[i];
-                for (size_t position = 0; position < messages.length[i]; ++position) {
-                    if (text[position] == '\n' && (i != 0 || position != headerLength))
-                        text[position] = ' ';
-                }
-            }
-        }
-
         if (messages.count < 2)
             return true;
 
         for (uint8_t i = 0; i < messages.count; ++i) {
-            char part[12];
-            const int length =
-                std::snprintf(part, sizeof(part), "(%u/%u)", static_cast<unsigned>(i + 1), static_cast<unsigned>(messages.count));
+            char part[DCR_CHAT_PART_NUMBER_RESERVE + 1];
+            const int length = std::snprintf(part, sizeof(part), " (%u/%u)", static_cast<unsigned>(i + 1),
+                                             static_cast<unsigned>(messages.count));
             if (length < 0 || static_cast<size_t>(length) >= sizeof(part))
                 return false;
 
-            char *text = messages.text[i];
-            const size_t partLength = static_cast<size_t>(length);
-            if (i == 0) {
-                const size_t suffixLength = partLength + 1;
-                if (messages.length[i] + suffixLength >= DCR_CHAT_CAPACITY)
-                    return false;
-                std::memmove(text + headerLength + suffixLength, text + headerLength, messages.length[i] - headerLength + 1);
-                text[headerLength] = ' ';
-                std::memcpy(text + headerLength + 1, part, partLength);
-                messages.length[i] += static_cast<uint16_t>(suffixLength);
-            } else {
-                if (messages.length[i] + partLength >= DCR_CHAT_CAPACITY)
-                    return false;
-                std::memmove(text + partLength, text, messages.length[i] + 1);
-                std::memcpy(text, part, partLength);
-                if (text[partLength] == '\n')
-                    text[partLength] = continuationSeparator;
-                messages.length[i] += static_cast<uint16_t>(partLength);
-            }
+            char *tail = messages.text[i] + header.size();
+            std::memmove(tail + length, tail, messages.length[i] - header.size() + 1);
+            std::memcpy(tail, part, length);
+            messages.length[i] += length;
         }
         return true;
     }
 
   private:
-    bool startContinuation()
+    bool startPart()
     {
         if (messages.count == MAX_DECODED_QZSS_MESSAGES)
             return false;
         const size_t index = messages.count++;
-        messages.text[index][0] = '\0';
-        messages.length[index] = 0;
+        char *text = messages.text[index];
+        std::memcpy(text, header.data(), header.size());
+        text[header.size()] = '\n';
+        text[header.size() + 1] = '\0';
+        messages.length[index] = static_cast<uint16_t>(header.size() + 1);
         return true;
     }
 
     DecodedQzssMessages &messages;
-    const char *header;
+    std::string_view header;
 };
 
 const char *dcrName(DcrCode table, uint64_t code, const char *fallback)
@@ -1390,6 +1376,7 @@ const char *dcrName(DcrCode table, uint64_t code, const char *fallback)
 
 template <typename Select> bool appendQzssRegions(DcrChat &chat, const char *prefix, unsigned count, Select select)
 {
+    constexpr std::string_view separator = "、";
     char line[DCR_CHAT_CAPACITY];
     const size_t prefixLength = std::strlen(prefix);
     std::memcpy(line, prefix, prefixLength);
@@ -1399,15 +1386,17 @@ template <typename Select> bool appendQzssRegions(DcrChat &chat, const char *pre
         if (!region)
             continue;
         const size_t regionLength = std::strlen(region);
-        if (length > prefixLength && length + 1 + regionLength > chat.lineCapacity()) {
+        if (length > prefixLength && length + separator.size() + regionLength > chat.bodyCapacity()) {
             line[length] = '\0';
             if (!chat.append("%s", line))
                 return false;
             length = prefixLength;
         }
-        if (length > prefixLength)
-            line[length++] = ' ';
-        if (length + regionLength > chat.lineCapacity())
+        if (length > prefixLength) {
+            std::memcpy(line + length, separator.data(), separator.size());
+            length += separator.size();
+        }
+        if (length + regionLength > chat.bodyCapacity())
             return false;
         std::memcpy(line + length, region, regionLength);
         length += regionLength;
@@ -1927,7 +1916,7 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
             name = dcrTsunamiWarning(getBits(frame, 80, 4));
         const char *region = dcrName(DcrCode::TsunamiForecastRegion, dcrSingleTsunamiRegion(frame), nullptr);
         if (region) {
-            std::snprintf(subject, sizeof(subject), "%s｜%s", name, region);
+            std::snprintf(subject, sizeof(subject), "%s %s", name, region);
             name = subject;
             regionInTitle = true;
         }
@@ -1935,14 +1924,14 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     }
     case 8: {
         const unsigned warningCode = getBits(frame, 69, 7);
-        std::snprintf(subject, sizeof(subject), "%s｜%s%s", dcrName(DcrCode::VolcanoName, getBits(frame, 76, 12), "火山情報"),
+        std::snprintf(subject, sizeof(subject), "%s %s%s", dcrName(DcrCode::VolcanoName, getBits(frame, 76, 12), "火山情報"),
                       warningCode >= 11 && warningCode <= 15 ? "噴火警戒" : "",
                       dcrName(DcrCode::VolcanicWarningCode, warningCode, "警報種別不明"));
         name = subject;
         break;
     }
     case 9:
-        std::snprintf(subject, sizeof(subject), "%s｜降灰予報（%s）",
+        std::snprintf(subject, sizeof(subject), "%s 降灰予報（%s）",
                       dcrName(DcrCode::VolcanoName, getBits(frame, 71, 12), "火山名不明"),
                       dcrName(DcrCode::AshFallWarningType, getBits(frame, 69, 2), "種別不明"));
         name = subject;
@@ -1968,40 +1957,34 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
         break;
     }
 
-    const char *warningState = "";
-    if (!cancelled && hazard == 10) {
-        const unsigned state = getBits(frame, 53, 3);
-        if (state != 1)
-            warningState = state == 2 ? " 解除" : " 状態不明";
-    }
+    const bool weather = !cancelled && hazard == 10;
+    const unsigned weatherState = getBits(frame, 53, 3);
+    const bool weatherCleared = weather && weatherState == 2;
+    const char *warningState = weather && weatherState != 1 && !weatherCleared ? " 状態不明" : "";
     const char *warning = regional ? dcrCommonWarning(frame, *regional) : nullptr;
     if (warning) {
         std::snprintf(subject, sizeof(subject), "%s%s", warning, warningState);
         name = subject;
     }
 
-    char title[96];
-    const char *status = cancelled ? "【取消】" : std::strcmp(kind, "訂正") == 0 ? "【訂正】" : "";
-    std::snprintf(title, sizeof(title), "%s%s[%s]", training ? "【訓練・試験】" : "", status, category);
     const unsigned month = getBits(frame, 21, 4);
     const unsigned day = getBits(frame, 25, 5);
     const unsigned hour = getBits(frame, 30, 5);
     const unsigned minute = getBits(frame, 35, 6);
     time_t issued = 0;
-    char issuedText[40] = "時刻不明";
+    char issuedText[40] = "発表時刻不明";
     if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59) {
         if (!findDcrReportEpoch(month, day, hour, minute, issued) ||
-            !formatDcrLocalTime(issued, issuedText, sizeof(issuedText)))
-            std::snprintf(issuedText, sizeof(issuedText), "%02u/%02u %02u:%02u UTC", month, day, hour, minute);
+            !formatDcrLocalTime(issued, issuedText, sizeof(issuedText), "%m/%d %H:%M 発表"))
+            std::snprintf(issuedText, sizeof(issuedText), "%02u/%02u %02u:%02u UTC 発表", month, day, hour, minute);
     }
 
+    const char *status = cancelled ? " 【取消】" : std::strcmp(kind, "訂正") == 0 ? " 【訂正】" : "";
     char header[96];
-    std::snprintf(header, sizeof(header), "みちびきDCR 発表時刻:%s", issuedText);
+    std::snprintf(header, sizeof(header), "みちびきDCR%s%s%s %s", training ? " 【訓練・試験】" : "", status,
+                  weatherCleared ? " 【解除】" : "", issuedText);
     DcrChat chat(messages, header);
-    const bool hasDetail = std::strcmp(name, category) != 0;
-    const bool inlineDetail = hasDetail && std::strlen(title) + 1 + std::strlen(name) <= chat.lineCapacity();
-    if (!chat.append("%s%s%s", title, inlineDetail ? " " : "", inlineDetail ? name : "") ||
-        (hasDetail && !inlineDetail && !chat.append("%s", name)))
+    if (!chat.append("[%s]", category) || (std::strcmp(name, category) != 0 && !chat.append("%s", name)))
         return false;
     bool ok = true;
     switch (hazard) {
@@ -2032,7 +2015,7 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
         ok = cancelled || appendDcrTyphoon(chat, frame, issued);
         break;
     }
-    return ok && chat.finish(' ');
+    return ok && chat.finish();
 }
 
 bool formatDcxInstruction(uint32_t code, char *text, size_t capacity)
@@ -2380,23 +2363,21 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     const bool test = type == 0 || hazard == 13 || hazard == 113 || instructionTest;
     const DcxJAlertInstruction *instruction = jAlert && supportedLibrary ? dcxJAlertInstruction(code) : nullptr;
     const bool cleared = type == 3 || (instruction && instruction->allClear);
-    const char *status = test          ? "【試験】"
-                         : type == 3   ? (jAlert ? "【誤報取消】" : "【解除】")
-                         : cleared     ? "【避難解除】"
-                         : type == 2   ? "【更新】"
-                         : instruction ? ""
-                                       : "【警報】";
-    const char *name = instruction && type != 3 && !instructionTest ? instruction->headline : dcxHazardText(hazard);
-    if ((!instruction || type == 3) && (hazard == 0 || hazard > 113))
-        name = test ? "災害情報" : "災害種別不明";
-    char title[136];
-    const char *source = jAlert ? "Jアラート｜" : local ? "自治体｜" : japan ? "Lアラート｜" : "";
+    const char *status = test        ? "【試験】"
+                         : type == 3 ? (jAlert ? "【誤報取消】" : "【解除】")
+                         : cleared   ? "【避難解除】"
+                         : type == 2 ? "【更新】"
+                                     : "【警報】";
+    const char *category = hazard > 0 && hazard <= 113 ? dcxHazardText(hazard) : test ? "災害情報" : "災害種別不明";
+    const char *headline = instruction && type != 3 && !instructionTest ? instruction->headline : "";
+    const char *source = jAlert ? " Jアラート" : local ? " 自治体" : japan ? " Lアラート" : "";
     const bool showSeverity = severity && !test && !cleared && !jAlert;
-    std::snprintf(title, sizeof(title), "%s%s%s%s%s", status, source, name, showSeverity ? "｜" : "",
-                  showSeverity ? dcxSeverityText(severity) : "");
 
-    DcrChat chat(messages, "みちびきDCX");
-    if (!chat.append("%s", title))
+    char header[40];
+    std::snprintf(header, sizeof(header), "みちびきDCX %s", status);
+    DcrChat chat(messages, header);
+    if (!chat.append("[%s]%s%s%s%s%s", category, source, *headline ? " " : "", headline, showSeverity ? " " : "",
+                     showSeverity ? dcxSeverityText(severity) : ""))
         return false;
     if (!instructionTest && type != 3 && code) {
         if (!supportedLibrary) {
@@ -2430,14 +2411,14 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     if (!japan) {
         const char *countryName = dcxCountryText(country);
         if (std::strcmp(countryName, "予約") == 0)
-            return chat.finish(' ');
+            return chat.finish();
         const char *providerName = dcxProviderText(country, provider);
         const bool namedProvider =
             provider && std::strcmp(providerName, "予約") != 0 && std::strcmp(providerName, "国・地域別定義") != 0;
         if (!chat.append("配信元 %s%s%s", countryName, namedProvider ? "・" : "", namedProvider ? providerName : ""))
             return false;
     }
-    return chat.finish(' ');
+    return chat.finish();
 }
 
 bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMessages &messages)
