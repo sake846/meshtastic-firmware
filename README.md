@@ -1,40 +1,61 @@
-<div align="center" markdown="1">
+<div align="center">
 
-<img src=".github/meshtastic_logo.png" alt="Meshtastic Logo" width="80"/>
+<img src=".github/meshtastic_logo.png" alt="Meshtastic logo" width="80"/>
+
 <h1>Meshtastic Firmware</h1>
 
-![GitHub release downloads](https://img.shields.io/github/downloads/meshtastic/firmware/total)
-[![CI](https://img.shields.io/github/actions/workflow/status/meshtastic/firmware/main_matrix.yml?branch=master&label=actions&logo=github&color=yellow)](https://github.com/meshtastic/firmware/actions/workflows/ci.yml)
-[![CLA assistant](https://cla-assistant.io/readme/badge/meshtastic/firmware)](https://cla-assistant.io/meshtastic/firmware)
-[![Fiscal Contributors](https://opencollective.com/meshtastic/tiers/badge.svg?label=Fiscal%20Contributors&color=deeppink)](https://opencollective.com/meshtastic/)
-[![Vercel](https://img.shields.io/static/v1?label=Powered%20by&message=Vercel&style=flat&logo=vercel&color=000000)](https://vercel.com?utm_source=meshtastic&utm_campaign=oss)
-[![MemBrowse](https://membrowse.com/badge.svg)](https://membrowse.com/public/meshtastic/firmware)
+<p>Open-source firmware for long-range, low-power LoRa mesh communication.</p>
 
-<a href="https://trendshift.io/repositories/5524" target="_blank"><img src="https://trendshift.io/api/badge/repositories/5524" alt="meshtastic%2Ffirmware | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-</div>
+<p>
+  <a href="https://meshtastic.org/">Website</a> ·
+  <a href="https://meshtastic.org/docs/">Documentation</a> ·
+  <a href="https://github.com/meshtastic/firmware">Upstream project</a>
+</p>
 
 </div>
 
-<div align="center">
-	<a href="https://meshtastic.org">Website</a>
-	-
-	<a href="https://meshtastic.org/docs/">Documentation</a>
-</div>
+## About
 
-## Overview
+Meshtastic lets radio devices exchange text messages, location, and telemetry over a decentralized LoRa mesh. A phone or computer can connect to a radio over Bluetooth, Wi-Fi, or USB; mesh communication does not require cellular service or internet access.
 
-This repository contains the official device firmware for Meshtastic, an open-source LoRa mesh networking project designed for long-range, low-power communication without relying on internet or cellular infrastructure. The firmware supports various hardware platforms, including ESP32, nRF52, RP2040/RP2350, and Linux-based devices.
+This repository contains firmware for a range of embedded and Linux-based devices. It is built with PlatformIO and C++17. Hardware variants define the board-specific radio, display, GPS, and power configuration.
 
-Meshtastic enables text messaging, location sharing, and telemetry over a decentralized mesh network, making it ideal for outdoor adventures, emergency preparedness, and remote operations.
+### QZSS L1S support
 
-### Get Started
+The `dev-qzss-l1s` branch adds optional QZSS L1S Disaster and Crisis Management Report (DCR) reception for compatible u-blox M10 GNSS receivers. On supported builds, the firmware can decode received DCR messages and surface them to the connected Meshtastic client.
 
-- 🔧 **[Building Instructions](https://meshtastic.org/docs/development/firmware/build)** - Learn how to compile the firmware from source.
-- ⚡ **[Flashing Instructions](https://meshtastic.org/docs/getting-started/flashing-firmware/)** - Install or update the firmware on your device.
+## For device users
 
-Join our community and help improve Meshtastic! 🚀
+- [Check supported devices and get started](https://meshtastic.org/docs/getting-started/)
+- [Flash firmware](https://meshtastic.org/docs/getting-started/flashing-firmware/)
+- [Open the Meshtastic web flasher](https://flasher.meshtastic.org/)
+- [Read the configuration guides](https://meshtastic.org/docs/configuration/)
 
-## Stats
+The web flasher provides released firmware. To use changes from this development branch, build and flash a firmware image from this repository.
 
-![Alt](https://repobeats.axiom.co/api/embed/8025e56c482ec63541593cc5bd322c19d5c0bdcf.svg "Repobeats analytics image")
+## Build from source
+
+Install Git and PlatformIO, then follow the [firmware build guide](https://meshtastic.org/docs/development/firmware/build/). Choose a PlatformIO environment for your board and build it with:
+
+```sh
+pio run -e <environment>
+```
+
+For example, the LilyGo T-LoRa Pager environment is `tlora-pager`. Build environments and board definitions are under `variants/`.
+
+Available targets include ESP32, nRF52/nRF54, RP2040/RP2350, STM32WL, and native Linux/macOS builds. Feature availability depends on the hardware and build target.
+
+## Development
+
+- `src/` contains the firmware, mesh networking, radio, GPS, and feature modules.
+- `variants/` contains board-specific definitions and PlatformIO environments.
+- `protobufs/` contains the protocol definitions used to generate message bindings.
+- `test/` contains native C++ unit-test suites.
+
+On Linux, run the native unit tests with:
+
+```sh
+./bin/run-tests.sh
+```
+
+For test setup, contribution guidance, and hardware workflows, see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Meshtastic documentation](https://meshtastic.org/docs/).
