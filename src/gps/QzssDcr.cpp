@@ -1263,7 +1263,7 @@ class DcrChat
         return appendText(std::string_view(line, length));
     }
 
-    bool appendText(std::string_view text)
+    bool appendText(std::string_view text, bool keepTogether = false)
     {
         constexpr std::string_view FULLWIDTH_SPACE = "　";
         constexpr std::string_view IDEOGRAPHIC_COMMA = "、";
@@ -1278,6 +1278,11 @@ class DcrChat
             size_t length = text.size();
             size_t advance = length;
             if (length > available) {
+                if (keepTogether && hasBody && length <= capacity) {
+                    if (!startPart())
+                        return false;
+                    continue;
+                }
                 size_t split = text.find_last_of(" \t", available);
                 size_t delimiterLength = 1;
                 bool includeDelimiter = false;
@@ -1875,35 +1880,19 @@ constexpr DcrRegionalWarnings DCR_WEATHER{
 constexpr DcrRegionalWarnings DCR_FLOOD{53, 4, 40, 3, DcrCode::FloodWarningLevel, DcrCode::FloodForecastRegion};
 constexpr DcrRegionalWarnings DCR_MARINE{53, 5, 14, 8, DcrCode::MarineWarningCode, DcrCode::MarineForecastRegion};
 
-const char *dcrCommonWarning(const uint8_t *frame, const DcrRegionalWarnings &layout)
+bool appendDcrRegionalWarnings(DcrChat &chat, const uint8_t *frame, const DcrRegionalWarnings &layout, const char *state)
 {
-    uint32_t code = UINT32_MAX;
-    for (unsigned i = 0; i < layout.count; ++i) {
-        if (!layout.region(frame, i))
-            continue;
-        const uint32_t warning = layout.warning(frame, i);
-        if (code != UINT32_MAX && code != warning)
-            return nullptr;
-        code = warning;
-    }
-    return dcrName(layout.warningTable, code, nullptr);
-}
-
-bool appendDcrRegionalWarnings(DcrChat &chat, const uint8_t *frame, const DcrRegionalWarnings &layout, const char *state,
-                               bool warningInTitle)
-{
-    if (warningInTitle)
-        return appendDcrRegions(chat, "", layout.regionTable, layout.count, [&](unsigned i) { return layout.region(frame, i); });
-
     uint32_t seen = 0;
     for (unsigned i = 0; i < layout.count; ++i) {
         const uint32_t code = layout.warning(frame, i);
         const uint32_t mask = uint32_t{1} << code;
         if (!layout.region(frame, i) || (seen & mask))
             continue;
+        if (seen && !chat.appendText("/"))
+            return false;
         seen |= mask;
         char label[96];
-        std::snprintf(label, sizeof(label), "%s%s ", dcrName(layout.warningTable, code, "警報種別不明"), state);
+        std::snprintf(label, sizeof(label), "%s:%s ", dcrName(layout.warningTable, code, "警報種別不明"), state);
         if (!appendDcrRegions(chat, label, layout.regionTable, layout.count,
                               [&](unsigned j) { return layout.warning(frame, j) == code ? layout.region(frame, j) : 0; }))
             return false;
@@ -2001,11 +1990,6 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     const unsigned weatherState = getBits(frame, 53, 3);
     const bool weatherCleared = weather && weatherState == 2;
     const char *warningState = weather && weatherState != 1 && !weatherCleared ? " 状態不明" : "";
-    const char *warning = regional ? dcrCommonWarning(frame, *regional) : nullptr;
-    if (warning) {
-        std::snprintf(subject, sizeof(subject), "%s%s", warning, warningState);
-        name = subject;
-    }
 
     const unsigned month = getBits(frame, 21, 4);
     const unsigned day = getBits(frame, 25, 5);
@@ -2020,11 +2004,14 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     }
 
     const char *status = cancelled ? " 【取消】" : std::strcmp(kind, "訂正") == 0 ? " 【訂正】" : "";
-    char header[96];
-    std::snprintf(header, sizeof(header), "DCR%s%s%s %s", training ? " 【訓練・試験】" : "", status,
-                  weatherCleared ? " 【解除】" : "", issuedText);
+    const char *categorySeparator = training || *status || weatherCleared ? "" : " ";
+    char header[DCR_CHAT_CAPACITY - DCR_CHAT_PART_NUMBER_RESERVE - 2];
+    const int headerLength = std::snprintf(header, sizeof(header), "DCR%s%s%s%s%s %s", training ? " 【訓練・試験】" : "", status,
+                                           weatherCleared ? " 【解除】" : "", categorySeparator, category, issuedText);
+    if (headerLength < 0 || static_cast<size_t>(headerLength) >= sizeof(header))
+        return false;
     DcrChat chat(messages, header);
-    if (!chat.append("[%s]", category) || (std::strcmp(name, category) != 0 && !chat.append("%s", name)))
+    if (std::strcmp(name, category) != 0 && !chat.appendText(name))
         return false;
     bool ok = true;
     switch (hazard) {
@@ -2049,7 +2036,7 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     case 10:
     case 11:
     case 14:
-        ok = appendDcrRegionalWarnings(chat, frame, *regional, warningState, warning != nullptr);
+        ok = appendDcrRegionalWarnings(chat, frame, *regional, warningState);
         break;
     case 12:
         ok = cancelled || appendDcrTyphoon(chat, frame, issued);
@@ -2346,8 +2333,12 @@ bool appendDcxChatEllipse(DcrChat &chat, const uint8_t *frame, const char *label
     if (longitude > 180.0)
         longitude -= 360.0;
     const double tilt = -90.0 + angle * 180.0 / (additional ? 128 : 64);
-    return chat.append("%s %.3f°, %.3f°／半径%g×%gkm／東基準%+.0f°", label, latitude, longitude,
-                       dcxEllipseRadiusMilliKm(major) / 1000.0, dcxEllipseRadiusMilliKm(minor) / 1000.0, tilt);
+    char detail[DCR_CHAT_CAPACITY];
+    const int length =
+        std::snprintf(detail, sizeof(detail), "%s %.3f°, %.3f°／半径%g×%gkm／東基準%+.0f°", label, latitude, longitude,
+                      dcxEllipseRadiusMilliKm(major) / 1000.0, dcxEllipseRadiusMilliKm(minor) / 1000.0, tilt);
+    return length > 0 && static_cast<size_t>(length) < sizeof(detail) &&
+           chat.appendText(std::string_view(detail, length), /*keepTogether=*/true);
 }
 
 const char *dcxMunicipality(uint32_t code)
@@ -2358,7 +2349,7 @@ const char *dcxMunicipality(uint32_t code)
     return name ? name : "市区町村名不明";
 }
 
-bool appendDcxChatTarget(DcrChat &chat, const uint8_t *frame, bool japan, bool jAlert)
+bool appendDcxChatTarget(DcrChat &chat, const uint8_t *frame, bool japan, bool jAlert, bool hasEllipse)
 {
     if (jAlert) {
         if (getBit(frame, 146)) {
@@ -2375,12 +2366,10 @@ bool appendDcxChatTarget(DcrChat &chat, const uint8_t *frame, bool japan, bool j
         return appendDcrRegions(chat, "対象 ", DcrCode::Prefecture, 47,
                                 [&](unsigned i) { return (prefectures & (uint64_t{1} << i)) ? i + 1 : 0; });
     }
-    if (getBits64(frame, 80, 49))
-        return appendDcxChatEllipse(chat, frame, "対象範囲の目安", false);
-    if (!japan)
-        return true;
-    const char *municipality = dcxMunicipality(getBits(frame, 146, 16));
-    return !municipality || chat.append("対象 %s", municipality);
+    const char *municipality = japan ? dcxMunicipality(getBits(frame, 146, 16)) : nullptr;
+    if (municipality)
+        return chat.append("対象 %s%s", municipality, hasEllipse ? "（詳細範囲あり）" : "");
+    return !hasEllipse || chat.appendText("対象 詳細範囲あり");
 }
 
 bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
@@ -2410,14 +2399,15 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
                                      : "【警報】";
     const char *category = hazard > 0 && hazard <= 113 ? dcxHazardText(hazard) : test ? "災害情報" : "災害種別不明";
     const char *headline = instruction && type != 3 && !instructionTest ? instruction->headline : "";
-    const char *source = jAlert ? " Jアラート" : local ? " 自治体" : japan ? " Lアラート" : "";
+    const char *source = jAlert ? "Jアラート" : local ? "自治体" : japan ? "Lアラート" : "";
     const bool showSeverity = severity && !test && !cleared && !jAlert;
 
-    char header[40];
-    std::snprintf(header, sizeof(header), "DCX %s", status);
+    char header[DCR_CHAT_CAPACITY - DCR_CHAT_PART_NUMBER_RESERVE - 2];
+    const int headerLength = std::snprintf(header, sizeof(header), "DCX %s%s", status, category);
+    if (headerLength < 0 || static_cast<size_t>(headerLength) >= sizeof(header))
+        return false;
     DcrChat chat(messages, header);
-    if (!chat.append("[%s]%s%s%s%s%s", category, source, *headline ? " " : "", headline, showSeverity ? " " : "",
-                     showSeverity ? dcxSeverityText(severity) : ""))
+    if (!chat.appendText(source) || !chat.appendText(headline) || (showSeverity && !chat.appendText(dcxSeverityText(severity))))
         return false;
     if (!instructionTest && type != 3 && code) {
         if (!supportedLibrary) {
@@ -2427,10 +2417,11 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
             return false;
         }
     }
-    if (local && !cleared && getBits64(frame, 162, 52) &&
-        !appendDcxChatEllipse(chat, frame, getBit(frame, 162) ? "この範囲へ避難" : "この範囲から離れる", true))
+    const bool hasMainArea = !jAlert && getBits64(frame, 80, 49);
+    const bool hasAdditionalArea = local && !cleared && getBits64(frame, 162, 52);
+    if (!appendDcxChatTarget(chat, frame, japan, jAlert, hasMainArea || hasAdditionalArea))
         return false;
-    if (!appendDcxChatTarget(chat, frame, japan, jAlert))
+    if (hasAdditionalArea && !chat.appendText(getBit(frame, 162) ? "追加範囲へ避難" : "追加範囲から離れる"))
         return false;
 
     if (!cleared) {
@@ -2438,7 +2429,9 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
         if (onset > 0 && onset <= 10080) {
             char time[64];
             formatDcxOnsetDescription(getBit(frame, 49), onset, time, sizeof(time));
-            if (!chat.append("発生見込み %s", time))
+            char onsetText[sizeof(time) + sizeof("発生見込み ") - 1];
+            std::snprintf(onsetText, sizeof(onsetText), "発生見込み %s", time);
+            if (!chat.appendText(onsetText, /*keepTogether=*/true))
                 return false;
         }
         static const char *const durations[] = {"", "6時間未満", "6時間以上12時間未満", "12時間以上24時間未満"};
@@ -2450,14 +2443,18 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     }
     if (!japan) {
         const char *countryName = dcxCountryText(country);
-        if (std::strcmp(countryName, "予約") == 0)
-            return chat.finish();
-        const char *providerName = dcxProviderText(country, provider);
-        const bool namedProvider =
-            provider && std::strcmp(providerName, "予約") != 0 && std::strcmp(providerName, "国・地域別定義") != 0;
-        if (!chat.append("配信元 %s%s%s", countryName, namedProvider ? "・" : "", namedProvider ? providerName : ""))
-            return false;
+        if (std::strcmp(countryName, "予約") != 0) {
+            const char *providerName = dcxProviderText(country, provider);
+            const bool namedProvider =
+                provider && std::strcmp(providerName, "予約") != 0 && std::strcmp(providerName, "国・地域別定義") != 0;
+            if (!chat.append("配信元 %s%s%s", countryName, namedProvider ? "・" : "", namedProvider ? providerName : ""))
+                return false;
+        }
     }
+    if (hasMainArea && !appendDcxChatEllipse(chat, frame, "対象範囲の詳細", false))
+        return false;
+    if (hasAdditionalArea && !appendDcxChatEllipse(chat, frame, "追加範囲の詳細", true))
+        return false;
     return chat.finish();
 }
 
