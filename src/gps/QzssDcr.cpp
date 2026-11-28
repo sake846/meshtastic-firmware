@@ -240,7 +240,7 @@ std::atomic<uint16_t> qzssSatelliteData[MAX_MICHIBIKI_SV_ID] = {};
 bool isMichibikiNode(const meshtastic_NodeInfoLite *node)
 {
     if (!node || node->num != MICHIBIKI_NODE_NUM || !nodeInfoLiteHasUser(node) ||
-        node->public_key.size != 0 || !nodeInfoLiteHasIsUnmessagable(node) || !nodeInfoLiteIsUnmessagable(node))
+        node->public_key.size != 0 || !nodeInfoLiteHasIsUnmessagable(node))
         return false;
 
     return std::strcmp(node->long_name, "Michibiki") == 0 && std::strcmp(node->short_name, "QZSS") == 0;
@@ -264,9 +264,10 @@ bool registerMichibikiNode(uint8_t svId)
     qzss.hw_model = meshtastic_HardwareModel_UNSET;
     qzss.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
     qzss.has_is_unmessagable = true;
-    qzss.is_unmessagable = true;
+    qzss.is_unmessagable = false;
     if (existing && existing->channel == channelIndex && existing->hw_model == qzss.hw_model &&
         existing->role == qzss.role && !nodeInfoLiteIsLicensed(existing) &&
+        nodeInfoLiteHasIsUnmessagable(existing) && !nodeInfoLiteIsUnmessagable(existing) &&
         std::strcmp(existing->long_name, qzss.long_name) == 0 &&
         std::strcmp(existing->short_name, qzss.short_name) == 0)
         return true;
