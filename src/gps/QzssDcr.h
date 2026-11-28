@@ -7,6 +7,7 @@ namespace QzssDcr
 inline constexpr char SETTINGS_FILE_NAME[] = "/prefs/qzss_dcr.dat";
 inline constexpr uint8_t MAX_QZSS_SATELLITES = 10;
 inline constexpr uint32_t MICHIBIKI_NODE_NUM = 0x515A5301;
+inline constexpr uint32_t MICHIBIKI_NODE_NUM_BASE = MICHIBIKI_NODE_NUM - 1;
 
 struct SatelliteStatus {
     uint8_t svId;
