@@ -1408,12 +1408,16 @@ template <typename Select> bool appendDcrRegions(DcrChat &chat, const char *pref
     });
 }
 
-const char *dcrComment(uint32_t code)
+const char *dcrComment(uint32_t code, char *unknownBuffer, size_t unknownBufferSize)
 {
     switch (code) {
+    case 102:
+        return "若干の海面変動あり。被害のおそれなし。";
+    case 103:
+        return "海面変動が続く見込み。";
     case 104:
     case 213:
-        return "海面変動が続く見込み。海水浴・磯釣り等に注意。";
+        return "海面変動が続く見込み。海水浴・磯釣り注意。";
     case 105:
     case 214:
         return "海面変動が続く見込み。磯釣り等に注意。";
@@ -1424,20 +1428,32 @@ const char *dcrComment(uint32_t code)
     case 110:
         return "満潮と重なると津波が高くなる。十分注意。";
     case 111:
-        return "場所により観測値を超える津波が到達したおそれ。";
+        return "場所により予想を超える津波到達のおそれ。";
+    case 112:
+        return "津波がさらに高くなる可能性。";
     case 113:
-        return "沖合観測から、一部沿岸には津波が到達したと推定。";
+        return "沖合観測から津波到達を推定。";
     case 114:
-        return "潮位変化から最大波の観測まで数時間以上かかることがあります。";
+        return "津波の最大波まで数時間かかることがあります。";
+    case 115:
+        return "沖合で津波観測。沿岸ではさらに高い津波のおそれ。";
     case 121:
     case 122:
         return "沿岸・川沿いは直ちに高台などへ。解除まで戻らない。";
+    case 123:
+        return "海中・海岸は危険。海から上がり、解除まで近づかない。";
+    case 124:
+        return "若干の海面変動。被害のおそれなし。";
+    case 131:
+        return "沿岸・川沿いは直ちに避難。警報解除まで戻らない。";
     case 132:
         return "場所により予想を超える高さの津波のおそれ。";
+    case 141:
+        return "東日本大震災級の津波が来襲。";
     case 142:
-        return "沖合で高い津波を観測。大津波警報・津波警報に切替。";
+        return "沖合で高い津波。大津波・津波警報に切替。";
     case 143:
-        return "沖合で高い津波を観測。大津波警報・津波警報を変更。";
+        return "沖合で高い津波。大津波・津波警報を変更。";
     case 144:
         return "沖合で高い津波を観測。大津波警報に切替。";
     case 145:
@@ -1447,7 +1463,9 @@ const char *dcrComment(uint32_t code)
     case 147:
         return "沖合で高い津波を観測。津波警報を変更。";
     case 148:
-        return "沖合で高い津波を観測。予想される津波の高さを変更。";
+        return "沖合で高い津波。津波予想を変更。";
+    case 150:
+        return "南海トラフ地震臨時情報発表中。";
     case 201:
         return "強い揺れに警戒。";
     case 211:
@@ -1456,12 +1474,32 @@ const char *dcrComment(uint32_t code)
         return "日本沿岸で若干の海面変動のおそれ。被害の心配なし。";
     case 215:
         return "この地震による津波の心配なし。";
+    case 216:
+        return "震源が海底なら津波のおそれ。";
+    case 217:
+        return "今後の情報に注意。";
+    case 221:
+        return "太平洋広域で津波のおそれ。";
+    case 222:
+        return "太平洋で津波のおそれ。";
+    case 223:
+        return "北西太平洋で津波のおそれ。";
+    case 224:
+        return "インド洋広域で津波のおそれ。";
+    case 225:
+        return "インド洋で津波のおそれ。";
+    case 226:
+        return "震源近傍で津波のおそれ。";
     case 227:
         return "震源付近で小さな津波のおそれ。被害の心配なし。";
     case 228:
         return "この規模で震源が浅い海域の場合、津波のおそれ。";
     case 229:
         return "日本への津波は調査中。";
+    case 230:
+        return "日本への津波影響なし。";
+    case 241:
+        return "緊急地震速報を発表中。";
     case 242:
         return "緊急地震速報発表済み。観測最大震度2。";
     case 243:
@@ -1471,20 +1509,27 @@ const char *dcrComment(uint32_t code)
     case 245:
         return "緊急地震速報発表済み。強い揺れの観測なし。";
     default:
-        return dcrName(DcrCode::NotificationOnDisasterPrevention, code, "防災コメント内容不明");
+        if (const char *name = dcrName(DcrCode::NotificationOnDisasterPrevention, code, nullptr))
+            return name;
+        std::snprintf(unknownBuffer, unknownBufferSize, "防災上の留意事項（コード番号：%03u）",
+                      static_cast<unsigned>(code));
+        return unknownBuffer;
     }
 }
 
 bool appendDcrComments(DcrChat &chat, const uint8_t *frame, bool warningEnded)
 {
     const char *comments[3] = {};
+    char unknownComments[3][64] = {};
     const char *evacuation = nullptr;
     for (unsigned i = 0; i < 3; ++i) {
         const uint32_t code = getBits(frame, 53 + i * 9, 9);
         if (code == 121 || code == 122)
-            evacuation = warningEnded ? nullptr : dcrComment(code);
+            evacuation = warningEnded
+                             ? nullptr
+                             : dcrComment(code, unknownComments[i], sizeof(unknownComments[i]));
         else if (code && !(warningEnded && code == 149))
-            comments[i] = dcrComment(code);
+            comments[i] = dcrComment(code, unknownComments[i], sizeof(unknownComments[i]));
     }
     if (evacuation && !chat.append("%s", evacuation))
         return false;
