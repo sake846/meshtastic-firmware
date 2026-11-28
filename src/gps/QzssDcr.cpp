@@ -63,8 +63,8 @@ std::atomic<uint8_t> lastQzssCno[MAX_MICHIBIKI_SV_ID] = {};
 std::atomic<uint32_t> lastL1SBySatelliteMs[MAX_MICHIBIKI_SV_ID] = {};
 std::atomic<uint8_t> lastMessageTypeBySatellite[MAX_MICHIBIKI_SV_ID] = {};
 std::atomic<bool> hasL1SBySatellite[MAX_MICHIBIKI_SV_ID] = {};
-uint32_t lastNodeHeardUpdateMs[MAX_MICHIBIKI_SV_ID] = {};
-bool hasNodeHeardUpdate[MAX_MICHIBIKI_SV_ID] = {};
+uint32_t lastNodeHeardUpdateMs = 0;
+bool hasNodeHeardUpdate = false;
 
 uint8_t channelIndex = NO_CHANNEL;
 RecentMtFrame recentMtFrames[RECENT_MESSAGE_CAPACITY] = {};
@@ -243,54 +243,52 @@ uint32_t crc24q(const uint8_t *frame)
 
 std::atomic<uint16_t> qzssSatelliteData[MAX_MICHIBIKI_SV_ID] = {};
 
-// These local-only identities attribute DCR chat without making satellites radio peers.
-bool isMichibikiSatelliteNode(const meshtastic_NodeInfoLite *node, uint8_t svId)
+// This local-only identity attributes DCR chat without making QZSS a radio peer.
+bool isMichibikiNode(const meshtastic_NodeInfoLite *node)
 {
-    if (!node || node->num != MICHIBIKI_NODE_NUM_BASE + svId || !nodeInfoLiteHasUser(node) ||
+    if (!node || node->num != MICHIBIKI_NODE_NUM || !nodeInfoLiteHasUser(node) ||
         node->public_key.size != 0 || !nodeInfoLiteHasIsUnmessagable(node) || !nodeInfoLiteIsUnmessagable(node))
         return false;
 
-    char expectedName[sizeof(node->long_name)];
-    std::snprintf(expectedName, sizeof(expectedName), "Michibiki SV%u", static_cast<unsigned>(svId));
-    return std::strcmp(node->long_name, expectedName) == 0;
+    return std::strcmp(node->long_name, "Michibiki") == 0 && std::strcmp(node->short_name, "QZSS") == 0;
 }
 
-bool registerMichibikiSatellite(uint8_t svId)
+bool registerMichibikiNode(uint8_t svId)
 {
     if (!nodeDB || svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
         return false;
 
-    const NodeNum nodeNum = MICHIBIKI_NODE_NUM_BASE + svId;
+    const NodeNum nodeNum = MICHIBIKI_NODE_NUM;
     const meshtastic_NodeInfoLite *existing = nodeDB->getMeshNode(nodeNum);
-    if (existing && !isMichibikiSatelliteNode(existing, svId))
+    if (existing && !isMichibikiNode(existing))
         return false;
     if (!existing && nodeDB->isFull())
         return false;
 
-    meshtastic_User satellite = meshtastic_User_init_zero;
-    std::snprintf(satellite.short_name, sizeof(satellite.short_name), "Q%u", static_cast<unsigned>(svId));
-    satellite.hw_model = meshtastic_HardwareModel_UNSET;
-    satellite.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
-    if (existing && existing->channel == channelIndex && existing->hw_model == satellite.hw_model &&
-        existing->role == satellite.role && !nodeInfoLiteIsLicensed(existing) &&
-        std::strcmp(existing->short_name, satellite.short_name) == 0)
+    meshtastic_User qzss = meshtastic_User_init_zero;
+    std::snprintf(qzss.short_name, sizeof(qzss.short_name), "QZSS");
+    std::snprintf(qzss.long_name, sizeof(qzss.long_name), "Michibiki");
+    qzss.hw_model = meshtastic_HardwareModel_UNSET;
+    qzss.role = meshtastic_Config_DeviceConfig_Role_CLIENT;
+    qzss.has_is_unmessagable = true;
+    qzss.is_unmessagable = true;
+    if (existing && existing->channel == channelIndex && existing->hw_model == qzss.hw_model &&
+        existing->role == qzss.role && !nodeInfoLiteIsLicensed(existing) &&
+        std::strcmp(existing->long_name, qzss.long_name) == 0 &&
+        std::strcmp(existing->short_name, qzss.short_name) == 0)
         return true;
 
-    std::snprintf(satellite.long_name, sizeof(satellite.long_name), "Michibiki SV%u", static_cast<unsigned>(svId));
-    satellite.has_is_unmessagable = true;
-    satellite.is_unmessagable = true;
-    nodeDB->updateUser(nodeNum, satellite, channelIndex);
-    return isMichibikiSatelliteNode(nodeDB->getMeshNode(nodeNum), svId);
+    nodeDB->updateUser(nodeNum, qzss, channelIndex);
+    return isMichibikiNode(nodeDB->getMeshNode(nodeNum));
 }
 
-void sendMichibikiSatelliteIdentityToPhone(uint8_t svId)
+void sendMichibikiIdentityToPhone()
 {
-    if (!nodeDB || !router || !service || svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
+    if (!nodeDB || !router || !service)
         return;
 
-    const NodeNum nodeNum = MICHIBIKI_NODE_NUM_BASE + svId;
-    const auto *node = nodeDB->getMeshNode(nodeNum);
-    if (!isMichibikiSatelliteNode(node, svId))
+    const auto *node = nodeDB->getMeshNode(MICHIBIKI_NODE_NUM);
+    if (!isMichibikiNode(node))
         return;
 
     meshtastic_MeshPacket *packet = router->allocForSending();
@@ -298,7 +296,7 @@ void sendMichibikiSatelliteIdentityToPhone(uint8_t svId)
         return;
 
     const meshtastic_User satellite = TypeConversions::ConvertToUser(node);
-    packet->from = nodeNum;
+    packet->from = MICHIBIKI_NODE_NUM;
     packet->to = 0xffffffff;
     packet->channel = channelIndex < MAX_NUM_CHANNELS ? channelIndex : 0;
     if (!packet->has_rx_time)
@@ -314,27 +312,22 @@ void sendMichibikiSatelliteIdentityToPhone(uint8_t svId)
     service->sendToPhone(packet);
 }
 
-void recordMichibikiSatelliteReception(uint8_t svId)
+void recordMichibikiReception()
 {
-    if (svId == 0 || svId > MAX_MICHIBIKI_SV_ID)
+    if (hasNodeHeardUpdate && !Throttle::hasElapsed(lastNodeHeardUpdateMs, NODE_HEARD_UPDATE_INTERVAL_MS))
         return;
 
-    const uint8_t index = svId - 1;
-    if (hasNodeHeardUpdate[index] &&
-        !Throttle::hasElapsed(lastNodeHeardUpdateMs[index], NODE_HEARD_UPDATE_INTERVAL_MS))
-        return;
-
-    lastNodeHeardUpdateMs[index] = Time::stampMillis();
-    hasNodeHeardUpdate[index] = true;
+    lastNodeHeardUpdateMs = Time::stampMillis();
+    hasNodeHeardUpdate = true;
     meshtastic_MeshPacket packet = meshtastic_MeshPacket_init_zero;
     packet.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
-    packet.from = MICHIBIKI_NODE_NUM_BASE + svId;
+    packet.from = MICHIBIKI_NODE_NUM;
     packet.rx_time = getValidTime(RTCQualityFromNet);
     packet.has_rx_time = packet.rx_time != 0;
     if (!packet.has_rx_time)
         packet.rx_time = Time::getUptimeSecs();
     nodeDB->updateFrom(packet);
-    sendMichibikiSatelliteIdentityToPhone(svId);
+    sendMichibikiIdentityToPhone();
 }
 
 uint64_t mtFrameFingerprint(const uint8_t *frame)
@@ -1990,7 +1983,7 @@ bool formatDcrMessage(const uint8_t *frame, DecodedQzssMessages &messages)
 
     const char *status = cancelled ? " 【取消】" : std::strcmp(kind, "訂正") == 0 ? " 【訂正】" : "";
     char header[96];
-    std::snprintf(header, sizeof(header), "みちびきDCR%s%s%s %s", training ? " 【訓練・試験】" : "", status,
+    std::snprintf(header, sizeof(header), "DCR%s%s%s %s", training ? " 【訓練・試験】" : "", status,
                   weatherCleared ? " 【解除】" : "", issuedText);
     DcrChat chat(messages, header);
     if (!chat.append("[%s]", category) || (std::strcmp(name, category) != 0 && !chat.append("%s", name)))
@@ -2383,7 +2376,7 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     const bool showSeverity = severity && !test && !cleared && !jAlert;
 
     char header[40];
-    std::snprintf(header, sizeof(header), "みちびきDCX %s", status);
+    std::snprintf(header, sizeof(header), "DCX %s", status);
     DcrChat chat(messages, header);
     if (!chat.append("[%s]%s%s%s%s%s", category, source, *headline ? " " : "", headline, showSeverity ? " " : "",
                      showSeverity ? dcxSeverityText(severity) : ""))
@@ -2654,9 +2647,9 @@ void publishFrame(const uint8_t *payload)
         lastMessageTypeBySatellite[svId - 1].store(messageType);
         hasL1SBySatellite[svId - 1].store(true);
     }
-    const bool satelliteRegistered = registerMichibikiSatellite(svId);
-    if (satelliteRegistered)
-        recordMichibikiSatelliteReception(svId);
+    const bool qzssNodeRegistered = registerMichibikiNode(svId);
+    if (qzssNodeRegistered)
+        recordMichibikiReception();
 
     lastCaptureSvId.store(svId);
     lastCaptureMs.store(Time::getMillis());
@@ -2713,8 +2706,8 @@ void publishFrame(const uint8_t *payload)
         packet->decoded.payload.size = messages.length[i];
         std::memcpy(packet->decoded.payload.bytes, messages.text[i], messages.length[i]);
         packet->decoded.want_response = false;
-        if (satelliteRegistered)
-            packet->from = MICHIBIKI_NODE_NUM_BASE + svId;
+        if (qzssNodeRegistered)
+            packet->from = MICHIBIKI_NODE_NUM;
 
 #if HAS_SCREEN || defined(MESHTASTIC_INCLUDE_NICHE_GRAPHICS)
         messageStore.tryAddFromPacket(*packet);
@@ -2753,8 +2746,8 @@ void processUbxMessage()
                 ++navSatQzssSatelliteObservations;
                 diagnosticCno[svId - 1] = entry[2];
                 lastQzssCno[svId - 1].store(entry[2]);
-                if (registerMichibikiSatellite(svId))
-                    recordMichibikiSatelliteReception(svId);
+                if (registerMichibikiNode(svId))
+                    recordMichibikiReception();
             }
             if (entry[2] == 0)
                 continue;
