@@ -48,7 +48,6 @@ constexpr uint32_t MESSAGE_DEDUP_INTERVAL_MS = 60 * 60 * 1000;
 constexpr uint8_t MAX_MICHIBIKI_SV_ID = MAX_QZSS_SATELLITES;
 constexpr uint8_t QZSS_L1CA_SIG_ID = 0;
 constexpr uint8_t QZSS_L1S_SIG_ID = 1;
-constexpr uint8_t MAX_SIGNAL_ID = 16;
 // Keep full MT frames for an hour; increase if the window can exceed this volume.
 constexpr size_t RECENT_MESSAGE_CAPACITY = 128;
 
@@ -84,13 +83,7 @@ uint32_t sfrbxOversizeMessages = 0;
 uint32_t sfrbxLengthErrors = 0;
 uint32_t nonL1sSfrbxMessages = 0;
 uint32_t l1sSfrbxMessages = 0;
-uint32_t nonQzssSfrbxMessages = 0;
-uint32_t qzssSfrbxBySignalId[MAX_SIGNAL_ID] = {};
-uint32_t qzssSfrbxUnknownSignalIds = 0;
 uint32_t qzssSfrbxBySatelliteSignal[MAX_MICHIBIKI_SV_ID][2] = {};
-uint32_t navSatReports = 0;
-uint32_t navSatReportsWithQzss = 0;
-uint32_t navSatQzssSatelliteObservations = 0;
 uint32_t l1sWordCountErrors = 0;
 uint32_t l1sPreambleRejects = 0;
 uint32_t l1sPreambleMatches = 0;
@@ -2423,7 +2416,8 @@ bool formatDcxChatMessage(const uint8_t *frame, DecodedQzssMessages &messages)
     return chat.finish();
 }
 
-bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId, DecodedQzssMessages &messages)
+[[maybe_unused]] bool formatDcxAllFields(const uint8_t *frame, uint8_t satelliteId,
+                                         DecodedQzssMessages &messages)
 {
     messages.count = 1;
     messages.length[0] = 0;
@@ -2595,15 +2589,8 @@ void publishFrame(const uint8_t *payload)
     if (payload[0] == 5) {
         const uint8_t svId = payload[1];
         const uint8_t sigId = payload[2];
-        if (sigId < MAX_SIGNAL_ID)
-            ++qzssSfrbxBySignalId[sigId];
-        else
-            ++qzssSfrbxUnknownSignalIds;
-
         if (svId > 0 && svId <= MAX_MICHIBIKI_SV_ID && sigId <= QZSS_L1S_SIG_ID)
             ++qzssSfrbxBySatelliteSignal[svId - 1][sigId];
-    } else {
-        ++nonQzssSfrbxMessages;
     }
 
     if (payload[0] != 5 || payload[2] != 1) {
@@ -2671,7 +2658,8 @@ void publishFrame(const uint8_t *payload)
             if (i + 1 < sizeof(frame))
                 rawFrameHex[position + 2] = ' ';
         }
-        LOG_INFO("QZSS MT%u raw: %s", static_cast<unsigned>(messageType), rawFrameHex);
+        LOG_INFO("QZSS MT%u SV%u raw: %s", static_cast<unsigned>(messageType),
+                 static_cast<unsigned>(192 + svId), rawFrameHex);
     }
 
     lastMt43Or44Ms = now;
@@ -2687,10 +2675,6 @@ void publishFrame(const uint8_t *payload)
 
     // GPS parsing is single-threaded; keep this multi-kilobyte buffer off the loop task stack.
     static DecodedQzssMessages messages;
-    if (GPS_DEBUG && messageType == 44 && formatDcxAllFields(frame, svId, messages)) {
-        for (uint8_t i = 0; i < messages.count; ++i)
-            LOG_INFO("[GPS] QZSS MT44 decoded: '%s'", messages.text[i]);
-    }
     if (!canPublish)
         return;
 
@@ -2730,11 +2714,8 @@ void processUbxMessage()
         const uint8_t numSvs = parser.payload[5];
         if (parser.length != 8 + static_cast<uint16_t>(numSvs) * 12)
             return;
-        ++navSatReports;
-
         uint16_t satellites[MAX_MICHIBIKI_SV_ID] = {};
         uint8_t diagnosticCno[MAX_MICHIBIKI_SV_ID] = {};
-        uint8_t qzssSatellitesInReport = 0;
         for (uint8_t i = 0; i < numSvs; ++i) {
             const uint8_t *entry = parser.payload + 8 + static_cast<uint16_t>(i) * 12;
             if (entry[0] != 5 || entry[1] == 0 || entry[1] > MAX_MICHIBIKI_SV_ID)
@@ -2742,8 +2723,6 @@ void processUbxMessage()
 
             const uint8_t svId = entry[1];
             if (entry[2] > 0) {
-                ++qzssSatellitesInReport;
-                ++navSatQzssSatelliteObservations;
                 diagnosticCno[svId - 1] = entry[2];
                 lastQzssCno[svId - 1].store(entry[2]);
                 if (registerMichibikiNode(svId))
@@ -2765,8 +2744,6 @@ void processUbxMessage()
             qzssSatelliteData[i].store(satellites[i]);
             diagnosticQzssCno[i].store(diagnosticCno[i]);
         }
-        if (qzssSatellitesInReport)
-            ++navSatReportsWithQzss;
         lastSatelliteReportMs.store(Time::getMillis());
         hasSatelliteReport.store(true);
     }
@@ -2894,32 +2871,6 @@ void logDiagnostics(const char *powerState)
              static_cast<unsigned long>(l1sPreambleRejects), static_cast<unsigned long>(l1sCrcMatches),
              static_cast<unsigned long>(l1sCrcRejects));
 
-    char signalSummary[256] = {};
-    size_t signalPosition = 0;
-    for (uint8_t sigId = 0; sigId < MAX_SIGNAL_ID; ++sigId) {
-        const uint32_t count = qzssSfrbxBySignalId[sigId];
-        if (!count)
-            continue;
-        const int length = std::snprintf(signalSummary + signalPosition, sizeof(signalSummary) - signalPosition,
-                                         "%s%u=%lu", signalPosition ? "," : "", static_cast<unsigned>(sigId),
-                                         static_cast<unsigned long>(count));
-        if (length < 0 || static_cast<size_t>(length) >= sizeof(signalSummary) - signalPosition)
-            break;
-        signalPosition += static_cast<size_t>(length);
-    }
-    LOG_INFO("QZSS SFRBX sigId/30s (0=L1CA,1=L1S): %s unknown=%lu nonQZSS=%lu",
-             signalPosition ? signalSummary : "none",
-             static_cast<unsigned long>(qzssSfrbxUnknownSignalIds),
-             static_cast<unsigned long>(nonQzssSfrbxMessages));
-
-    char navSatAge[16] = "never";
-    if (hasSatelliteReport.load())
-        std::snprintf(navSatAge, sizeof(navSatAge), "%lus",
-                      static_cast<unsigned long>((now - lastSatelliteReportMs.load()) / 1000));
-    LOG_INFO("QZSS NAV-SAT/30s: reports=%lu withQZSS=%lu svObs=%lu age=%s",
-             static_cast<unsigned long>(navSatReports), static_cast<unsigned long>(navSatReportsWithQzss),
-             static_cast<unsigned long>(navSatQzssSatelliteObservations), navSatAge);
-
     char messageTypeSummary[128] = {};
     size_t messageTypePosition = 0;
     for (uint8_t messageType = 0; messageType < 64; ++messageType) {
@@ -2995,13 +2946,7 @@ void logDiagnostics(const char *powerState)
     l1sCrcMatches = 0;
     std::memset(l1sMessageTypeCounts, 0, sizeof(l1sMessageTypeCounts));
     std::memset(l1sFramesBySatellite, 0, sizeof(l1sFramesBySatellite));
-    std::memset(qzssSfrbxBySignalId, 0, sizeof(qzssSfrbxBySignalId));
     std::memset(qzssSfrbxBySatelliteSignal, 0, sizeof(qzssSfrbxBySatelliteSignal));
-    qzssSfrbxUnknownSignalIds = 0;
-    nonQzssSfrbxMessages = 0;
-    navSatReports = 0;
-    navSatReportsWithQzss = 0;
-    navSatQzssSatelliteObservations = 0;
 }
 
 void setUbloxM10Detected(bool detected)
